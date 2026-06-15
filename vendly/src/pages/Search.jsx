@@ -69,7 +69,14 @@ function Search() {
   }, [search, filterOption])
 
   function getCardId(card) {
-    return card?.id || card?.card_id || card?.tcgplayer_id || card?.uuid || getCardName(card)
+    return (
+      card?.pokewallet_id ||
+      card?.card_id ||
+      card?.tcgplayer_id ||
+      card?.uuid ||
+      card?.id ||
+      getCardName(card)
+    )
   }
 
   function getCardName(card) {
@@ -101,14 +108,34 @@ function Search() {
   }
 
   function getCardImage(card) {
-    if (!card?.id) return null
+    if (card?.image_url) return card.image_url
+    if (card?.image) return card.image
+    if (card?.images?.large) return card.images.large
+    if (card?.images?.small) return card.images.small
+
+    const cardId =
+      card?.pokewallet_id ||
+      card?.card_id ||
+      card?.tcgplayer_id ||
+      card?.uuid ||
+      card?.id
+
+    if (!cardId) return null
 
     return `https://xkwqzfncwiiaqpzbmhaf.supabase.co/functions/v1/pokewallet-image?id=${encodeURIComponent(
-      card.id
+      cardId
     )}`
   }
 
   function getMarketPrice(card) {
+    const directPrice =
+      card?.market_price ||
+      card?.price ||
+      card?.prices?.market ||
+      card?.prices?.usd
+    
+    if (directPrice) return directPrice
+    
     const tcgPrices = card?.tcgplayer?.prices || []
     const cardmarketPrices = card?.cardmarket?.prices || []
 
@@ -293,6 +320,9 @@ function Search() {
       body: { query: search },
     })
 
+    console.log('Search data:', data)
+    console.log('Search error:', error)
+
     if (error) {
       setMessage(error.message || 'Error connecting to PokéWallet.')
       setCards([])
@@ -344,25 +374,33 @@ function Search() {
     setShowTypeModal(true)
   }
 
-  async function cacheSelectedCardImage(card) {
-    const cardId = getCardId(card)
+async function cacheSelectedCardImage(card) {
+  const cardId =
+    card?.pokewallet_id ||
+    card?.card_id ||
+    card?.tcgplayer_id ||
+    card?.uuid ||
+    card?.id
 
-    if (!cardId) return getCardImage(card)
+  if (!cardId) return getCardImage(card)
 
-    const { data, error } = await supabase.functions.invoke(
-      'pokewallet-cache-image',
-      {
-        body: { id: cardId },
-      }
-    )
-
-    if (error) {
-      console.warn('Image cache failed:', error.message)
-      return getCardImage(card)
+  const { data, error } = await supabase.functions.invoke(
+    'pokewallet-cache-image',
+    {
+      body: { id: cardId },
     }
+  )
 
-    return data?.image_url || getCardImage(card)
+  console.log('Image cache data:', data)
+  console.log('Image cache error:', error)
+
+  if (error) {
+    console.warn('Image cache failed:', error.message)
+    return getCardImage(card)
   }
+
+  return data?.image_url || getCardImage(card)
+}
 
   async function addToInventory(itemType) {
     if (!selectedCard || saving) return

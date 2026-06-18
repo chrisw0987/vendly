@@ -14,6 +14,9 @@ import {
 function Search() {
   const [search, setSearch] = useState('')
   const [cards, setCards] = useState([])
+  const [currentPage, setCurrentPage] = useState(1)
+  const [totalPages, setTotalPages] = useState(1)
+  const RESULTS_PER_PAGE = 20
   const [loading, setLoading] = useState(false)
   const [saving, setSaving] = useState(false)
   const [message, setMessage] = useState('')
@@ -62,7 +65,8 @@ function Search() {
     }
 
     const delaySearch = setTimeout(() => {
-      searchCards()
+      setCurrentPage(1)
+      searchCards(1)
     }, 500)
 
     return () => clearTimeout(delaySearch)
@@ -113,18 +117,7 @@ function Search() {
     if (card?.images?.large) return card.images.large
     if (card?.images?.small) return card.images.small
 
-    const cardId =
-      card?.pokewallet_id ||
-      card?.card_id ||
-      card?.tcgplayer_id ||
-      card?.uuid ||
-      card?.id
-
-    if (!cardId) return null
-
-    return `https://xkwqzfncwiiaqpzbmhaf.supabase.co/functions/v1/pokewallet-image?id=${encodeURIComponent(
-      cardId
-    )}`
+    return null
   }
 
   function getMarketPrice(card) {
@@ -304,7 +297,7 @@ function Search() {
     })
   }
 
-  async function searchCards() {
+  async function searchCards(page = currentPage) {
     if (!search.trim()) return
 
     if (filterOption === 'sealed') {
@@ -317,7 +310,11 @@ function Search() {
     setMessage('')
 
     const { data, error } = await supabase.functions.invoke('pokewallet-search', {
-      body: { query: search },
+      body: {
+        query: search,
+        page,
+        limit: RESULTS_PER_PAGE,
+      },
     })
 
     console.log('Search data:', data)
@@ -333,7 +330,11 @@ function Search() {
     const results = data?.results || data?.data || data?.cards || []
 
     setCards(results)
+    setCurrentPage(page)
+    setTotalPages(data?.pagination?.total_pages || data?.total_pages || 1)
     setLoading(false)
+
+    cacheSearchResultImages(results)
   }
 
   async function fetchInventoryCounts() {
@@ -374,33 +375,66 @@ function Search() {
     setShowTypeModal(true)
   }
 
-async function cacheSelectedCardImage(card) {
-  const cardId =
-    card?.pokewallet_id ||
-    card?.card_id ||
-    card?.tcgplayer_id ||
-    card?.uuid ||
-    card?.id
+  async function cacheSelectedCardImage(card) {
+    const cardId =
+      card?.pokewallet_id ||
+      card?.card_id ||
+      card?.tcgplayer_id ||
+      card?.uuid ||
+      card?.id ||
+      getCardId(card)
 
-  if (!cardId) return getCardImage(card)
+    if (!cardId) return getCardImage(card)
 
-  const { data, error } = await supabase.functions.invoke(
-    'pokewallet-cache-image',
-    {
-      body: { id: cardId },
+    const { data, error } = await supabase.functions.invoke(
+      'pokewallet-cache-image',
+      {
+        body: { id: cardId },
+      }
+    )
+
+    if (error) {
+      console.warn('Image cache failed:', error.message)
+      return getCardImage(card)
     }
-  )
 
-  console.log('Image cache data:', data)
-  console.log('Image cache error:', error)
-
-  if (error) {
-    console.warn('Image cache failed:', error.message)
-    return getCardImage(card)
+    return data?.image_url || getCardImage(card)
   }
 
-  return data?.image_url || getCardImage(card)
-}
+  async function cacheSearchResultImages(results) {
+    results.forEach(async (card) => {
+      if (card?.image_url) return
+
+      const cardId = getCardId(card)
+
+      if (!cardId) return
+
+      const { data, error } = await supabase.functions.invoke(
+        'pokewallet-cache-image',
+        {
+          body: { id: cardId },
+        }
+      )
+
+      if (error) {
+        console.warn('Background image cache failed:', error.message)
+        return
+      }
+
+      if (!data?.image_url) return
+
+      setCards((currentCards) =>
+        currentCards.map((currentCard) =>
+          getCardId(currentCard) === cardId
+            ? {
+                ...currentCard,
+                image_url: data.image_url,
+              }
+            : currentCard
+        )
+      )
+  })
+  }
 
   async function addToInventory(itemType) {
     if (!selectedCard || saving) return
@@ -846,6 +880,30 @@ async function cacheSelectedCardImage(card) {
                 )
               })}
             </div>
+            
+            <div className="mt-5 flex items-center justify-between gap-3 rounded-2xl border border-[#222] bg-[#111] p-3">
+              <button
+                onClick={() => searchCards(currentPage - 1)}
+                disabled={loading || currentPage <= 1}
+                className="rounded-lg border border-[#222] px-4 py-2 text-sm font-semibold disabled:opacity-40"
+              >
+                Previous
+              </button>
+
+              <p className="text-sm text-gray-400">
+                Page <span className="font-bold text-white">{currentPage}</span> of{' '}
+                <span className="font-bold text-white">{totalPages}</span>
+              </p>
+
+              <button
+                onClick={() => searchCards(currentPage + 1)}
+                disabled={loading || currentPage >= totalPages}
+                className="rounded-lg border border-[#222] px-4 py-2 text-sm font-semibold disabled:opacity-40"
+              >
+                Next
+              </button>
+            </div>
+
           </section>
         )}
       </main>

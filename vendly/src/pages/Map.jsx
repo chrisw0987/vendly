@@ -46,6 +46,17 @@ function Map() {
     useUserLocation()
   }, [])
 
+  useEffect(() => {
+    if (!selectedEvent) return undefined
+
+    const previousOverflow = document.body.style.overflow
+    document.body.style.overflow = 'hidden'
+
+    return () => {
+      document.body.style.overflow = previousOverflow
+    }
+  }, [selectedEvent])
+
   async function getUser() {
     const {
       data: { user },
@@ -509,7 +520,7 @@ function Map() {
 
   function getDirections(event) {
     const query = encodeURIComponent(
-      event.address || `${event.venue || ''} ${event.city || ''} ${event.state || ''}`
+      `${event.venue || ''} ${event.city || ''} ${event.state || ''}`|| event.address
     )
 
     window.open(`https://www.google.com/maps/search/?api=1&query=${query}`, '_blank')
@@ -809,8 +820,13 @@ function Map() {
       </main>
 
       {selectedEvent && (
-        <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/70 px-4 pb-4">
-          <div className="max-h-[88vh] w-full max-w-[430px] overflow-y-auto rounded-3xl border border-[#222] bg-[#111] p-5">
+        <div
+          className="fixed inset-0 z-[60] flex items-center justify-center bg-black/80 p-3 sm:p-5"
+          role="dialog"
+          aria-modal="true"
+        >
+          <div className="flex h-[calc(100dvh-1.5rem)] max-h-[900px] w-full max-w-[430px] flex-col overflow-hidden rounded-3xl border border-[#222] bg-[#111] shadow-2xl sm:h-[calc(100dvh-2.5rem)]">
+            <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain p-5 pb-10">
             {!selectedVendorTable ? (
               <>
                 <div className="mb-4 flex items-start justify-between gap-4">
@@ -1151,6 +1167,7 @@ function Map() {
                 </div>
               </>
             )}
+            </div>
           </div>
         </div>
       )}

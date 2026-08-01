@@ -268,15 +268,16 @@ function Shows() {
   async function leaveShow(profile) {
     const event = getEventForProfile(profile)
     const confirmed = window.confirm(
-      `Leave ${event?.name || 'this show'}? This will remove your booth profile for this event.`
+      `Leave ${event?.name || 'this show'}? This will remove your booth profile and unassign all of your inventory from this event.`
     )
 
     if (!confirmed) return
 
-    const { error } = await supabase
-      .from('vendor_event_profiles')
-      .delete()
-      .eq('id', profile.id)
+    setMessage('Leaving show...')
+
+    const { error } = await supabase.rpc('leave_vendor_show', {
+      p_event_id: profile.event_id,
+    })
 
     if (error) {
       setMessage(error.message)
@@ -284,7 +285,14 @@ function Shows() {
     }
 
     setProfiles((current) => current.filter((item) => item.id !== profile.id))
-    setMessage('You left this show.')
+    setBoothInputs((current) => ({ ...current, [profile.event_id]: '' }))
+    setDisplayNameInputs((current) => ({ ...current, [profile.event_id]: '' }))
+    setEditingProfile(null)
+    setMessage(
+      'You left the show. Your booth was released and your inventory was unassigned.'
+    )
+
+    await fetchData()
   }
 
   async function togglePublic(profile) {
@@ -529,7 +537,7 @@ function Shows() {
               <div className="mt-4 rounded-2xl border border-red-900 bg-red-950/20 p-4">
                 <p className="font-semibold text-red-300">Application not approved</p>
                 <p className="mt-1 text-sm text-gray-400">
-                  Your last vendor application was not approved. You can update your details and submit again.
+                  Your vendor application was not approved. Please update your details and reach out to: vendlyteamofficial@gmail.com.
                 </p>
               </div>
             ) : (

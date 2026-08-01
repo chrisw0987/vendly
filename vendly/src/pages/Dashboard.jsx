@@ -15,6 +15,7 @@ import {
   LogOut,
   Plus,
   ArrowRight,
+  ShieldCheck,
 } from 'lucide-react'
 
 function Dashboard() {
@@ -37,6 +38,7 @@ function Dashboard() {
   const [recentSales, setRecentSales] = useState([])
 
   const isVendor = accountType === 'vendor' || accountType === 'admin'
+  const isAdmin = accountType === 'admin'
 
   useEffect(() => {
     fetchDashboardData()
@@ -351,6 +353,14 @@ function Dashboard() {
                 title="Map"
                 subtitle="Explore shows"
               />
+              {isAdmin && (
+                <DashboardAction
+                  to="/admin"
+                  icon={<ShieldCheck size={20} />}
+                  title="Admin"
+                  subtitle="Manage Vendly"
+                />
+              )}
             </section>
 
             <section className="mb-6">
@@ -581,6 +591,7 @@ function Dashboard() {
               <Search size={18} />
               {isVendor ? 'Search Cards' : 'Add Cards to Collection'}
             </Link>
+
           </>
         )}
       </main>

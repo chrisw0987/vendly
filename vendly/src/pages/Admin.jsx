@@ -793,7 +793,7 @@ function Admin() {
                 </div>
 
                 <input
-                  placeholder="Location label, optional"
+                  placeholder="Apple/Google Map URL, optional"
                   value={eventForm.location}
                   onChange={(e) =>
                     setEventForm((current) => ({
@@ -1012,7 +1012,7 @@ function Admin() {
                           </div>
 
                           <input
-                            placeholder="Location label, optional"
+                            placeholder="Apple/Google Map URL, optional"
                             value={editEventForm.location}
                             onChange={(e) =>
                               setEditEventForm((current) => ({

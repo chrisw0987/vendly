@@ -29,9 +29,13 @@ function Search() {
   const [inventoryCounts, setInventoryCounts] = useState({})
   const [lists, setLists] = useState([])
   const [selectedListId, setSelectedListId] = useState('')
+  const [wishlistLists, setWishlistLists] = useState([])
+  const [selectedWishlistListId, setSelectedWishlistListId] = useState('')
 
   const [selectedCard, setSelectedCard] = useState(null)
+  const [showDestinationModal, setShowDestinationModal] = useState(false)
   const [showTypeModal, setShowTypeModal] = useState(false)
+  const [addDestination, setAddDestination] = useState('wishlist')
   const [showRawModal, setShowRawModal] = useState(false)
   const [showGradedModal, setShowGradedModal] = useState(false)
 
@@ -44,6 +48,9 @@ function Search() {
   const [showPublic, setShowPublic] = useState(false)
   const [listingPrice, setListingPrice] = useState('')
   const [purchasePrice, setPurchasePrice] = useState('')
+  const [targetPrice, setTargetPrice] = useState('')
+  const [priority, setPriority] = useState(2)
+  const [notificationsEnabled, setNotificationsEnabled] = useState(true)
   const [vendorShows, setVendorShows] = useState([])
   const [selectedShowIds, setSelectedShowIds] = useState([])
   const [accountType, setAccountType] = useState('user')
@@ -54,6 +61,7 @@ function Search() {
     fetchAccountType()
     fetchInventoryCounts()
     fetchInventoryLists()
+    fetchWishlistLists()
     fetchVendorShows()
   }, [])
 
@@ -215,6 +223,33 @@ function Search() {
     }
   }
 
+
+  async function fetchWishlistLists() {
+    const {
+      data: { user },
+    } = await supabase.auth.getUser()
+
+    if (!user) return
+
+    const { data, error } = await supabase
+      .from('wishlist_lists')
+      .select('*')
+      .eq('owner_id', user.id)
+      .order('created_at', { ascending: true })
+
+    if (error) {
+      setMessage(error.message)
+      return
+    }
+
+    const availableLists = data || []
+    setWishlistLists(availableLists)
+
+    if (availableLists.length > 0) {
+      setSelectedWishlistListId(availableLists[0].id)
+    }
+  }
+
   async function fetchVendorShows() {
     const {
       data: { user },
@@ -365,15 +400,33 @@ function Search() {
     setSelectedCard(card)
     setListingPrice('')
     setPurchasePrice('')
-    setCondition('NM')
+    setTargetPrice('')
+    setPriority(2)
+    setNotificationsEnabled(true)
+    setAddDestination(isVendor ? '' : 'wishlist')
+    setCondition(isVendor ? 'NM' : 'ANY')
     setGradeCompany('PSA')
     setGrade('10')
     setQuantity(1)
     setPhysicalLocation('')
     setShowPublic(false)
     setSelectedShowIds([])
+
+    if (isVendor) {
+      setShowDestinationModal(true)
+    } else {
+      setShowTypeModal(true)
+    }
+  }
+
+  function chooseAddDestination(destination) {
+    setAddDestination(destination)
+    setCondition(destination === 'wishlist' ? 'ANY' : 'NM')
+    setShowDestinationModal(false)
     setShowTypeModal(true)
   }
+
+  const addingToInventory = isVendor && addDestination === 'inventory'
 
   async function cacheSelectedCardImage(card) {
     const cardId =
@@ -434,6 +487,75 @@ function Search() {
         )
       )
   })
+  }
+
+  async function addToWishlist(itemType) {
+    if (!selectedCard || saving) return
+
+    setSaving(true)
+    setMessage('')
+
+    try {
+      const {
+        data: { user },
+      } = await supabase.auth.getUser()
+
+      if (!user) {
+        setMessage('You must be logged in to add to your wishlist.')
+        return
+      }
+
+      if (!selectedWishlistListId) {
+        setMessage('Please create or select a wishlist first.')
+        return
+      }
+
+      setMessage('Caching card image...')
+      const cachedImageUrl = await cacheSelectedCardImage(selectedCard)
+
+      const newWishlistItem = {
+        owner_id: user.id,
+        wishlist_list_id: selectedWishlistListId,
+        card_id: getCardId(selectedCard),
+        card_name: getCardName(selectedCard),
+        set_name: getSetName(selectedCard),
+        card_number: getCardNumber(selectedCard),
+        rarity: getRarity(selectedCard),
+        image_url: cachedImageUrl,
+        item_type: itemType,
+        desired_condition: itemType === 'raw' ? condition : null,
+        grade_company: itemType === 'graded' ? gradeCompany : null,
+        desired_grade: itemType === 'graded' ? grade : null,
+        target_price: targetPrice === '' ? null : Number(targetPrice),
+        desired_quantity: 1,
+        priority: Number(priority),
+        notes: null,
+        notifications_enabled: notificationsEnabled,
+      }
+
+      setMessage('Adding to wishlist...')
+
+      const { error } = await supabase
+        .from('wishlist_items')
+        .insert(newWishlistItem)
+
+      if (error) {
+        if (error.code === '23505') {
+          setMessage('This card is already in that wishlist with the same preferences.')
+          return
+        }
+
+        setMessage(error.message)
+        return
+      }
+
+      setShowRawModal(false)
+      setShowGradedModal(false)
+      setSelectedCard(null)
+      setMessage('Added to wishlist.')
+    } finally {
+      setSaving(false)
+    }
   }
 
   async function addToInventory(itemType) {
@@ -653,7 +775,7 @@ function Search() {
         <div className="mb-8">
           <h1 className="text-3xl font-bold">Search</h1>
           <p className="mt-1 text-sm text-gray-400">
-            {isVendor ? 'Search cards, sets, and add items to inventory.' : 'Search cards, sets, and track items in your collection.'}
+            {isVendor ? 'Search cards, sets, and add items to inventory.' : 'Search cards, sets, and add items to your wishlist.'}
           </p>
         </div>
 
@@ -908,18 +1030,70 @@ function Search() {
         )}
       </main>
 
-      {showTypeModal && selectedCard && (
+      {showDestinationModal && selectedCard && isVendor && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-5">
           <div className="w-full max-w-sm rounded-2xl border border-[#222] bg-[#111] p-5">
             <div className="mb-4 flex items-center justify-between">
-              <h2 className="text-xl font-semibold">Add Item</h2>
-              <button onClick={() => setShowTypeModal(false)}>
+              <h2 className="text-xl font-semibold">Choose Destination</h2>
+              <button
+                onClick={() => {
+                  setShowDestinationModal(false)
+                  setSelectedCard(null)
+                }}
+              >
                 <X size={22} />
               </button>
             </div>
 
             <p className="mb-4 text-sm text-gray-400">
-              Choose how you want to add {getCardName(selectedCard)}.
+              Where would you like to add {getCardName(selectedCard)}?
+            </p>
+
+            <button
+              onClick={() => chooseAddDestination('wishlist')}
+              className="mb-3 w-full rounded-xl bg-white p-4 text-left text-black"
+            >
+              <span className="block font-semibold">Wishlist</span>
+              <span className="mt-1 block text-xs text-gray-600">
+                Save it as a card you want to find.
+              </span>
+            </button>
+
+            <button
+              onClick={() => chooseAddDestination('inventory')}
+              className="w-full rounded-xl border border-[#222] bg-[#1a1a1a] p-4 text-left"
+            >
+              <span className="block font-semibold">Vendor Inventory</span>
+              <span className="mt-1 block text-xs text-gray-400">
+                Add it as stock you own and may list for sale.
+              </span>
+            </button>
+          </div>
+        </div>
+      )}
+
+      {showTypeModal && selectedCard && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-5">
+          <div className="w-full max-w-sm rounded-2xl border border-[#222] bg-[#111] p-5">
+            <div className="mb-4 flex items-center justify-between">
+              <h2 className="text-xl font-semibold">Add Item</h2>
+              <button
+                onClick={() => {
+                  setShowTypeModal(false)
+                  if (isVendor) {
+                    setShowDestinationModal(true)
+                  } else {
+                    setSelectedCard(null)
+                  }
+                }}
+              >
+                <X size={22} />
+              </button>
+            </div>
+
+            <p className="mb-4 text-sm text-gray-400">
+              Choose whether {getCardName(selectedCard)} is raw or graded for your{' '}
+              {addingToInventory ? 'vendor inventory' : 'wishlist'}.
             </p>
 
             <button
@@ -947,7 +1121,7 @@ function Search() {
 
       {showRawModal && selectedCard && (
         <AddModal
-          title="Add Raw Card"
+          title={addingToInventory ? 'Add Raw Inventory' : 'Add Raw Wishlist Card'}
           selectedCard={selectedCard}
           getCardName={getCardName}
           getSetName={getSetName}
@@ -966,17 +1140,26 @@ function Search() {
           setPhysicalLocation={setPhysicalLocation}
           showPublic={showPublic}
           setShowPublic={setShowPublic}
-          lists={lists}
-          selectedListId={selectedListId}
-          setSelectedListId={setSelectedListId}
+          lists={addingToInventory ? lists : wishlistLists}
+          selectedListId={addingToInventory ? selectedListId : selectedWishlistListId}
+          setSelectedListId={addingToInventory ? setSelectedListId : setSelectedWishlistListId}
+          targetPrice={targetPrice}
+          setTargetPrice={setTargetPrice}
+          priority={priority}
+          setPriority={setPriority}
+          notificationsEnabled={notificationsEnabled}
+          setNotificationsEnabled={setNotificationsEnabled}
           vendorShows={vendorShows}
           selectedShowIds={selectedShowIds}
           toggleSelectedShow={toggleSelectedShow}
           formatEventDate={formatEventDate}
           isVendor={isVendor}
+          addingToInventory={addingToInventory}
           saving={saving}
           onClose={() => setShowRawModal(false)}
-          onAdd={() => addToInventory('raw')}
+          onAdd={() =>
+            addingToInventory ? addToInventory('raw') : addToWishlist('raw')
+          }
         >
           <label className="mb-2 block text-sm text-gray-400">Condition</label>
           <select
@@ -984,6 +1167,7 @@ function Search() {
             onChange={(e) => setCondition(e.target.value)}
             className="mb-4 w-full rounded-xl border border-[#222] bg-black p-3 text-white outline-none"
           >
+            {!addingToInventory && <option value="ANY">Any Condition</option>}
             <option value="NM">Near Mint</option>
             <option value="LP">Lightly Played</option>
             <option value="MP">Moderately Played</option>
@@ -995,7 +1179,11 @@ function Search() {
 
       {showGradedModal && selectedCard && (
         <AddModal
-          title="Add Graded Card"
+          title={
+            addingToInventory
+              ? 'Add Graded Inventory'
+              : 'Add Graded Wishlist Card'
+          }
           selectedCard={selectedCard}
           getCardName={getCardName}
           getSetName={getSetName}
@@ -1014,17 +1202,26 @@ function Search() {
           setPhysicalLocation={setPhysicalLocation}
           showPublic={showPublic}
           setShowPublic={setShowPublic}
-          lists={lists}
-          selectedListId={selectedListId}
-          setSelectedListId={setSelectedListId}
+          lists={addingToInventory ? lists : wishlistLists}
+          selectedListId={addingToInventory ? selectedListId : selectedWishlistListId}
+          setSelectedListId={addingToInventory ? setSelectedListId : setSelectedWishlistListId}
+          targetPrice={targetPrice}
+          setTargetPrice={setTargetPrice}
+          priority={priority}
+          setPriority={setPriority}
+          notificationsEnabled={notificationsEnabled}
+          setNotificationsEnabled={setNotificationsEnabled}
           vendorShows={vendorShows}
           selectedShowIds={selectedShowIds}
           toggleSelectedShow={toggleSelectedShow}
           formatEventDate={formatEventDate}
           isVendor={isVendor}
+          addingToInventory={addingToInventory}
           saving={saving}
           onClose={() => setShowGradedModal(false)}
-          onAdd={() => addToInventory('graded')}
+          onAdd={() =>
+            addingToInventory ? addToInventory('graded') : addToWishlist('graded')
+          }
         >
           <label className="mb-2 block text-sm text-gray-400">Grade Company</label>
           <select
@@ -1098,11 +1295,18 @@ function AddModal({
   lists,
   selectedListId,
   setSelectedListId,
+  targetPrice,
+  setTargetPrice,
+  priority,
+  setPriority,
+  notificationsEnabled,
+  setNotificationsEnabled,
   vendorShows,
   selectedShowIds,
   toggleSelectedShow,
   formatEventDate,
   isVendor,
+  addingToInventory,
   saving,
   onClose,
   onAdd,
@@ -1146,7 +1350,7 @@ function AddModal({
 
         {children}
 
-        <label className="mb-2 block text-sm text-gray-400">{isVendor ? 'Inventory List' : 'Collection List'}</label>
+        <label className="mb-2 block text-sm text-gray-400">{addingToInventory ? 'Inventory List' : 'Wishlist'}</label>
         <select
           value={selectedListId}
           onChange={(e) => setSelectedListId(e.target.value)}
@@ -1163,7 +1367,33 @@ function AddModal({
           )}
         </select>
 
-        {isVendor && (
+        {!addingToInventory && (
+          <>
+            <label className="mb-2 block text-sm text-gray-400">
+              Target Price <span className="text-gray-600">(optional)</span>
+            </label>
+            <input
+              type="number"
+              min="0"
+              step="0.01"
+              placeholder="Notify me at or below this price"
+              value={targetPrice}
+              onChange={(e) => setTargetPrice(e.target.value)}
+              className="mb-4 w-full rounded-xl border border-[#222] bg-black p-3 text-white outline-none"
+            />
+
+            <label className="mb-5 flex items-center gap-3 text-sm text-gray-300">
+              <input
+                type="checkbox"
+                checked={notificationsEnabled}
+                onChange={(e) => setNotificationsEnabled(e.target.checked)}
+              />
+              Notify me when a matching vendor card is available
+            </label>
+          </>
+        )}
+
+        {addingToInventory && (
         <div className="mb-4 rounded-2xl border border-[#222] bg-black p-3">
           <div className="mb-3 flex items-center justify-between gap-3">
             <div>
@@ -1233,7 +1463,7 @@ function AddModal({
 
         )}
 
-        {isVendor && (
+        {addingToInventory && (
           <>
             <label className="mb-2 block text-sm text-gray-400">Purchase Price</label>
             <input
@@ -1291,7 +1521,7 @@ function AddModal({
           </>
         )}
 
-        {isVendor && (
+        {addingToInventory && (
           <>
             <label className="mb-2 block text-sm text-gray-400">
               Physical Location
@@ -1305,7 +1535,7 @@ function AddModal({
           </>
         )}
 
-        {isVendor && (
+        {addingToInventory && (
           <label className="mb-5 flex items-center gap-3 text-sm text-gray-300">
             <input
               type="checkbox"
@@ -1323,9 +1553,9 @@ function AddModal({
         >
           {saving
             ? 'Adding...'
-            : isVendor
+            : addingToInventory
             ? 'Add to Inventory'
-            : 'Add to Collection'}
+            : 'Add to Wishlist'}
         </button>
       </div>
     </div>

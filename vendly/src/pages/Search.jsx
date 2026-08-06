@@ -65,21 +65,6 @@ function Search() {
     fetchVendorShows()
   }, [])
 
-  useEffect(() => {
-    if (!search.trim()) {
-      setCards([])
-      setMessage('')
-      return
-    }
-
-    const delaySearch = setTimeout(() => {
-      setCurrentPage(1)
-      searchCards(1)
-    }, 500)
-
-    return () => clearTimeout(delaySearch)
-  }, [search, filterOption])
-
   function getCardId(card) {
     return (
       card?.pokewallet_id ||
@@ -332,8 +317,17 @@ function Search() {
     })
   }
 
-  async function searchCards(page = currentPage) {
-    if (!search.trim()) return
+  async function searchCards(page = 1, queryOverride = search) {
+    if (loading) return
+
+    const cleanQuery = String(queryOverride || '').trim()
+    const safePage = Number.isInteger(page) && page > 0 ? page : 1
+
+    if (!cleanQuery) {
+      setCards([])
+      setMessage('Enter a card name before searching.')
+      return
+    }
 
     if (filterOption === 'sealed') {
       setCards([])
@@ -346,8 +340,8 @@ function Search() {
 
     const { data, error } = await supabase.functions.invoke('pokewallet-search', {
       body: {
-        query: search,
-        page,
+        query: cleanQuery,
+        page: safePage,
         limit: RESULTS_PER_PAGE,
       },
     })
@@ -356,7 +350,9 @@ function Search() {
     console.log('Search error:', error)
 
     if (error) {
-      setMessage(error.message || 'Error connecting to PokéWallet.')
+      console.error('Search request failed:', error)
+      console.error('Search response data:', data)
+      setMessage('An error has occurred. Please try again.')
       setCards([])
       setLoading(false)
       return
@@ -365,11 +361,18 @@ function Search() {
     const results = data?.results || data?.data || data?.cards || []
 
     setCards(results)
-    setCurrentPage(page)
+    setCurrentPage(safePage)
     setTotalPages(data?.pagination?.total_pages || data?.total_pages || 1)
+
+    if (results.length === 0) {
+      setMessage('No results found.')
+    }
+
     setLoading(false)
 
-    cacheSearchResultImages(results)
+    if (results.length > 0) {
+      cacheSearchResultImages(results)
+    }
   }
 
   async function fetchInventoryCounts() {
@@ -486,7 +489,7 @@ function Search() {
             : currentCard
         )
       )
-  })
+    })
   }
 
   async function addToWishlist(itemType) {
@@ -787,6 +790,13 @@ function Search() {
               placeholder="Search cards, example: Charizard"
               value={search}
               onChange={(e) => setSearch(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') {
+                  e.preventDefault()
+                  setCurrentPage(1)
+                  searchCards(1)
+                }
+              }}
               className="w-full bg-transparent p-4 text-white outline-none"
             />
 
@@ -806,8 +816,12 @@ function Search() {
 
           <div className="mt-3 flex gap-2">
             <button
-              onClick={searchCards}
-              disabled={loading}
+              type="button"
+              onClick={() => {
+                setCurrentPage(1)
+                searchCards(1)
+              }}
+              disabled={loading || !search.trim()}
               className="flex-1 rounded-xl bg-white p-4 font-semibold text-black disabled:opacity-60"
             >
               {loading ? 'Searching...' : 'Search'}
@@ -929,8 +943,14 @@ function Search() {
               {['Charizard', 'Umbreon', 'Pikachu', 'Gengar', 'Mew'].map((item) => (
                 <button
                   key={item}
-                  onClick={() => setSearch(item)}
-                  className="rounded-full border border-[#222] bg-[#111] px-4 py-2 text-sm"
+                  type="button"
+                  onClick={() => {
+                    setSearch(item)
+                    setCurrentPage(1)
+                    searchCards(1, item)
+                  }}
+                  disabled={loading}
+                  className="rounded-full border border-[#222] bg-[#111] px-4 py-2 text-sm disabled:opacity-50"
                 >
                   {item}
                 </button>

@@ -240,11 +240,21 @@ function Login() {
   return (
     <div className="min-h-screen bg-black text-white flex items-center justify-center px-6">
       <div className="w-full max-w-[410px]">
-        <h1 className="text-5xl font-bold mb-2">Vendly</h1>
+        <div className="mb-8 flex items-center justify-between">
+      <div>
+        <h1 className="mb-2 text-5xl font-bold">Vendly</h1>
 
-        <p className="text-gray-400 mb-8">
+        <p className="text-gray-400">
           Inventory and discovery for card shows.
         </p>
+      </div>
+
+      <img
+        src="/vendly-logo.svg"
+        alt="Vendly Logo"
+        className="h-25 w-25 flex-shrink-0"
+      />
+    </div>
 
         {mode === 'login' ? (
           <>

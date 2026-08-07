@@ -1,4 +1,5 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
+import { useLocation } from 'react-router-dom'
 import Navbar from '../components/Navbar'
 import {
   CalendarDays,
@@ -16,6 +17,10 @@ import { supabase } from '../lib/supabase'
 
 
 function Map() {
+  const location = useLocation()
+  const searchSectionRef = useRef(null)
+  const floorplanSectionRef = useRef(null)
+
   const [activeTab, setActiveTab] = useState('saved')
   const [savedEvents, setSavedEvents] = useState([])
   const [savedEventIds, setSavedEventIds] = useState([])
@@ -39,12 +44,31 @@ function Map() {
   const [showInventoryResults, setShowInventoryResults] = useState([])
   const [showInventorySearching, setShowInventorySearching] = useState(false)
   const [showInventoryHasSearched, setShowInventoryHasSearched] = useState(false)
+  const [showInventoryType, setShowInventoryType] = useState('all')
+  const [showInventorySort, setShowInventorySort] = useState('price-low')
+
+  const [vendorInventorySearch, setVendorInventorySearch] = useState('')
+  const [vendorInventoryType, setVendorInventoryType] = useState('all')
+  const [vendorInventorySort, setVendorInventorySort] = useState('name-asc')
 
   useEffect(() => {
     fetchEvents()
     fetchSavedEvents()
     useUserLocation()
   }, [])
+
+  useEffect(() => {
+    const params = new URLSearchParams(location.search)
+    const eventId = params.get('event')
+
+    if (!eventId || events.length === 0) return
+
+    const event = events.find((item) => item.id === eventId)
+    if (!event) return
+
+    setActiveTab(savedEventIds.includes(eventId) ? 'saved' : 'explore')
+    openMoreInfo(event)
+  }, [location.search, events, savedEventIds])
 
   useEffect(() => {
     if (!selectedEvent) return undefined
@@ -56,6 +80,29 @@ function Map() {
       document.body.style.overflow = previousOverflow
     }
   }, [selectedEvent])
+
+  useEffect(() => {
+    if (!selectedEvent) return
+
+    const params = new URLSearchParams(location.search)
+    const view = params.get('view')
+
+    const timeout = setTimeout(() => {
+      if (view === 'floorplan') {
+        floorplanSectionRef.current?.scrollIntoView({
+          behavior: 'smooth',
+          block: 'start',
+        })
+      } else if (view === 'search') {
+        searchSectionRef.current?.scrollIntoView({
+          behavior: 'smooth',
+          block: 'start',
+        })
+      }
+    }, 200)
+
+    return () => clearTimeout(timeout)
+  }, [selectedEvent, location.search])
 
   async function getUser() {
     const {
@@ -70,7 +117,7 @@ function Map() {
 
     const { data, error } = await supabase
       .from('events')
-      .select('id, name, city, state, venue, address, starts_at, icon_url, floorplan_url, floorplan_preview_url')
+      .select('id, name, city, state, venue, address, starts_at, end_date, icon_url, floorplan_url, floorplan_preview_url')
       .order('starts_at', { ascending: true })
 
     if (error) {
@@ -100,6 +147,7 @@ function Map() {
           venue,
           address,
           starts_at,
+          end_date,
           icon_url,
           floorplan_url,
           floorplan_preview_url
@@ -264,6 +312,10 @@ function Map() {
 
   async function fetchVendorTableDetails(table) {
     const boothCode = table.booth_code || table.tableNumber
+
+    setVendorInventorySearch('')
+    setVendorInventoryType('all')
+    setVendorInventorySort('name-asc')
 
     if (!selectedEvent?.id) {
       setSelectedVendorTable({
@@ -494,6 +546,8 @@ function Map() {
     setShowInventorySearch('')
     setShowInventoryResults([])
     setShowInventoryHasSearched(false)
+    setShowInventoryType('all')
+    setShowInventorySort('price-low')
   }
 
   function openSearchResultBooth(result) {
@@ -577,6 +631,9 @@ function Map() {
     setShowBooths([])
     setOccupiedBooths([])
     clearShowInventorySearch()
+    setVendorInventorySearch('')
+    setVendorInventoryType('all')
+    setVendorInventorySort('name-asc')
   }
 
   const filteredExploreEvents = useMemo(() => {
@@ -620,6 +677,97 @@ function Map() {
       }),
     }))
   }, [showBooths])
+
+  const visibleShowInventoryResults = useMemo(() => {
+    const filtered = showInventoryResults.filter((result) => {
+      const itemType = String(result?.item?.item_type || '').toLowerCase()
+
+      return (
+        showInventoryType === 'all' ||
+        itemType === showInventoryType
+      )
+    })
+
+    return [...filtered].sort((a, b) => {
+      const aPrice = Number(getItemPrice(a.item))
+      const bPrice = Number(getItemPrice(b.item))
+      const aHasPrice = Number.isFinite(aPrice) && aPrice > 0
+      const bHasPrice = Number.isFinite(bPrice) && bPrice > 0
+
+      switch (showInventorySort) {
+        case 'price-high':
+          if (aHasPrice && !bHasPrice) return -1
+          if (!aHasPrice && bHasPrice) return 1
+          return (bHasPrice ? bPrice : 0) - (aHasPrice ? aPrice : 0)
+        case 'name-asc':
+          return getItemName(a.item).localeCompare(getItemName(b.item))
+        case 'name-desc':
+          return getItemName(b.item).localeCompare(getItemName(a.item))
+        case 'price-low':
+        default:
+          if (aHasPrice && !bHasPrice) return -1
+          if (!aHasPrice && bHasPrice) return 1
+          return (aHasPrice ? aPrice : 0) - (bHasPrice ? bPrice : 0)
+      }
+    })
+  }, [showInventoryResults, showInventoryType, showInventorySort])
+
+  const visibleVendorInventory = useMemo(() => {
+    const inventory = selectedVendorTable?.inventory || []
+    const query = vendorInventorySearch.trim().toLowerCase()
+
+    const filtered = inventory.filter((item) => {
+      const matchesSearch =
+        !query ||
+        [
+          item.card_name,
+          item.set_name,
+          item.card_number,
+          item.rarity,
+          item.condition,
+          item.grade_company,
+          item.grade,
+        ]
+          .filter(Boolean)
+          .join(' ')
+          .toLowerCase()
+          .includes(query)
+
+      const matchesType =
+        vendorInventoryType === 'all' ||
+        String(item.item_type || '').toLowerCase() === vendorInventoryType
+
+      return matchesSearch && matchesType
+    })
+
+    return [...filtered].sort((a, b) => {
+      const aPrice = Number(getItemPrice(a))
+      const bPrice = Number(getItemPrice(b))
+      const aHasPrice = Number.isFinite(aPrice) && aPrice > 0
+      const bHasPrice = Number.isFinite(bPrice) && bPrice > 0
+
+      switch (vendorInventorySort) {
+        case 'price-low':
+          if (aHasPrice && !bHasPrice) return -1
+          if (!aHasPrice && bHasPrice) return 1
+          return (aHasPrice ? aPrice : 0) - (bHasPrice ? bPrice : 0)
+        case 'price-high':
+          if (aHasPrice && !bHasPrice) return -1
+          if (!aHasPrice && bHasPrice) return 1
+          return (bHasPrice ? bPrice : 0) - (aHasPrice ? aPrice : 0)
+        case 'name-desc':
+          return getItemName(b).localeCompare(getItemName(a))
+        case 'name-asc':
+        default:
+          return getItemName(a).localeCompare(getItemName(b))
+      }
+    })
+  }, [
+    selectedVendorTable,
+    vendorInventorySearch,
+    vendorInventoryType,
+    vendorInventorySort,
+  ])
 
   return (
     <div className="min-h-screen bg-black text-white pb-24">
@@ -856,7 +1004,10 @@ function Map() {
                   </p>
                 </div>
 
-                <div className="mb-5 rounded-2xl border border-[#222] bg-black p-4">
+                <div
+                  ref={searchSectionRef}
+                  className="mb-5 scroll-mt-4 rounded-2xl border border-[#222] bg-black p-4"
+                >
                   <h3 className="mb-3 text-lg font-semibold">Search This Show</h3>
 
                   <div className="flex items-center rounded-xl border border-[#222] bg-[#111] px-3">
@@ -893,8 +1044,33 @@ function Map() {
                   </button>
 
                   {showInventoryResults.length > 0 && (
+                    <div className="mt-3 grid grid-cols-2 gap-2">
+                      <select
+                        value={showInventoryType}
+                        onChange={(e) => setShowInventoryType(e.target.value)}
+                        className="rounded-xl border border-[#222] bg-[#111] p-3 text-sm text-white outline-none"
+                      >
+                        <option value="all">All Types</option>
+                        <option value="raw">Raw Only</option>
+                        <option value="graded">Slab Only</option>
+                      </select>
+
+                      <select
+                        value={showInventorySort}
+                        onChange={(e) => setShowInventorySort(e.target.value)}
+                        className="rounded-xl border border-[#222] bg-[#111] p-3 text-sm text-white outline-none"
+                      >
+                        <option value="price-low">Price: Low–High</option>
+                        <option value="price-high">Price: High–Low</option>
+                        <option value="name-asc">Name: A–Z</option>
+                        <option value="name-desc">Name: Z–A</option>
+                      </select>
+                    </div>
+                  )}
+
+                  {visibleShowInventoryResults.length > 0 && (
                     <div className="mt-4 space-y-2">
-                      {showInventoryResults.map((result) => {
+                      {visibleShowInventoryResults.map((result) => {
                         const item = result.item
                         const price = getItemPrice(item)
 
@@ -945,11 +1121,30 @@ function Map() {
                         No matching public cards assigned to this show yet.
                       </p>
                     )}
+
+                  {showInventoryResults.length > 0 &&
+                    visibleShowInventoryResults.length === 0 && (
+                      <div className="mt-3 rounded-xl border border-[#222] bg-[#111] p-3 text-center">
+                        <p className="text-sm text-gray-500">
+                          No results match the selected type filter.
+                        </p>
+                        <button
+                          type="button"
+                          onClick={() => setShowInventoryType('all')}
+                          className="mt-2 text-sm font-semibold text-yellow-300"
+                        >
+                          Show All Types
+                        </button>
+                      </div>
+                    )}
                 </div>
 
 
                 {selectedEvent.floorplan_url && (
-                  <div className="mb-5 rounded-2xl border border-[#222] bg-black p-4">
+                  <div
+                    ref={floorplanSectionRef}
+                    className="mb-5 scroll-mt-4 rounded-2xl border border-[#222] bg-black p-4"
+                  >
                     <div className="mb-3 flex items-center justify-between gap-3">
                       <h3 className="text-lg font-semibold">Official Floorplan</h3>
                       <button
@@ -1087,14 +1282,65 @@ function Map() {
                 </div>
 
                 <div className="mt-5">
-                  <div className="mb-3 flex items-center justify-between">
+                  <div className="mb-3 flex items-center justify-between gap-3">
                     <h3 className="text-lg font-semibold">Assigned Show Inventory</h3>
                     {!selectedVendorTable.loading && (
-                      <p className="text-xs text-gray-500">
+                      <p className="shrink-0 text-xs text-gray-500">
+                        {visibleVendorInventory.length} of{' '}
                         {selectedVendorTable.inventory.length} cards
                       </p>
                     )}
                   </div>
+
+                  {!selectedVendorTable.loading &&
+                    !selectedVendorTable.inventoryError &&
+                    selectedVendorTable.inventory.length > 0 && (
+                      <div className="mb-4 space-y-3 rounded-2xl border border-[#222] bg-black p-3">
+                        <div className="flex items-center rounded-xl border border-[#222] bg-[#111] px-3">
+                          <SearchIcon size={17} className="text-gray-500" />
+                          <input
+                            placeholder="Search this vendor's inventory"
+                            value={vendorInventorySearch}
+                            onChange={(e) => setVendorInventorySearch(e.target.value)}
+                            className="w-full bg-transparent p-3 text-sm text-white outline-none"
+                          />
+
+                          {vendorInventorySearch && (
+                            <button
+                              type="button"
+                              onClick={() => setVendorInventorySearch('')}
+                              className="text-gray-500 hover:text-white"
+                              aria-label="Clear vendor inventory search"
+                            >
+                              <X size={17} />
+                            </button>
+                          )}
+                        </div>
+
+                        <div className="grid grid-cols-2 gap-2">
+                          <select
+                            value={vendorInventoryType}
+                            onChange={(e) => setVendorInventoryType(e.target.value)}
+                            className="rounded-xl border border-[#222] bg-[#111] p-3 text-sm text-white outline-none"
+                          >
+                            <option value="all">All Types</option>
+                            <option value="raw">Raw Only</option>
+                            <option value="graded">Slab Only</option>
+                          </select>
+
+                          <select
+                            value={vendorInventorySort}
+                            onChange={(e) => setVendorInventorySort(e.target.value)}
+                            className="rounded-xl border border-[#222] bg-[#111] p-3 text-sm text-white outline-none"
+                          >
+                            <option value="name-asc">Name: A–Z</option>
+                            <option value="name-desc">Name: Z–A</option>
+                            <option value="price-low">Price: Low–High</option>
+                            <option value="price-high">Price: High–Low</option>
+                          </select>
+                        </div>
+                      </div>
+                    )}
 
                   {selectedVendorTable.loading ? (
                     <div className="rounded-2xl border border-[#222] bg-black p-5 text-center">
@@ -1112,9 +1358,26 @@ function Map() {
                         This vendor has not assigned any public cards to this show yet.
                       </p>
                     </div>
+                  ) : visibleVendorInventory.length === 0 ? (
+                    <div className="rounded-2xl border border-[#222] bg-black p-5 text-center">
+                      <p className="text-sm font-semibold text-white">
+                        No inventory matches your filters.
+                      </p>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setVendorInventorySearch('')
+                          setVendorInventoryType('all')
+                          setVendorInventorySort('name-asc')
+                        }}
+                        className="mt-3 rounded-xl border border-[#222] bg-[#111] px-4 py-2 text-sm font-semibold text-gray-300"
+                      >
+                        Clear Filters
+                      </button>
+                    </div>
                   ) : (
                     <div className="space-y-2">
-                      {selectedVendorTable.inventory.map((item) => {
+                      {visibleVendorInventory.map((item) => {
                         const price = getItemPrice(item)
 
                         return (

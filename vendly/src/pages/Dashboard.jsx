@@ -16,6 +16,9 @@ import {
   Plus,
   ArrowRight,
   ShieldCheck,
+  Sparkles,
+  MapPin,
+  Ticket,
 } from 'lucide-react'
 
 function Dashboard() {
@@ -36,6 +39,8 @@ function Dashboard() {
   const [upcomingShows, setUpcomingShows] = useState([])
   const [savedUpcomingShows, setSavedUpcomingShows] = useState([])
   const [recentSales, setRecentSales] = useState([])
+  const [wishlistMatches, setWishlistMatches] = useState([])
+  const [showDayEvents, setShowDayEvents] = useState([])
 
   const isVendor = accountType === 'vendor' || accountType === 'admin'
   const isAdmin = accountType === 'admin'
@@ -81,6 +86,49 @@ function Dashboard() {
 
     setUsername(profileData?.username || '')
     setAccountType(nextAccountType)
+
+    const { data: wishlistSummaryData, error: wishlistSummaryError } =
+      await supabase.rpc('get_user_wishlist_summary')
+
+    if (wishlistSummaryError) {
+      console.error('Dashboard wishlist summary failed:', wishlistSummaryError)
+      setWishlistMatches([])
+    } else {
+      const matchedWishlistItems = (wishlistSummaryData || [])
+        .filter((item) => Number(item.total_matches || 0) > 0)
+        .sort((a, b) => {
+          const savedShowDifference =
+            Number(b.saved_show_matches || 0) -
+            Number(a.saved_show_matches || 0)
+
+          if (savedShowDifference !== 0) return savedShowDifference
+
+          const aPrice =
+            a.lowest_price === null || a.lowest_price === undefined
+              ? Number.POSITIVE_INFINITY
+              : Number(a.lowest_price)
+
+          const bPrice =
+            b.lowest_price === null || b.lowest_price === undefined
+              ? Number.POSITIVE_INFINITY
+              : Number(b.lowest_price)
+
+          return aPrice - bPrice
+        })
+
+      setWishlistMatches(matchedWishlistItems)
+    }
+
+    const { data: showDayData, error: showDayError } = await supabase.rpc(
+      'get_show_day_summary'
+    )
+
+    if (showDayError) {
+      console.error('Show-day summary failed:', showDayError)
+      setShowDayEvents([])
+    } else {
+      setShowDayEvents(showDayData || [])
+    }
 
     const { data: inventoryData, error: inventoryError } = await supabase
       .from('inventory_items')
@@ -286,6 +334,12 @@ function Dashboard() {
   }
 
   const potentialProfit = stats.listedValue - stats.costBasis
+  const totalWishlistListings = wishlistMatches.reduce(
+    (total, item) => total + Number(item.total_matches || 0),
+    0
+  )
+  const visibleWishlistMatches = wishlistMatches.slice(0, 3)
+  const activeShowDayEvent = showDayEvents[0] || null
 
   return (
     <div className="min-h-screen bg-black text-white pb-24">
@@ -324,6 +378,85 @@ function Dashboard() {
           </p>
         )}
 
+        {!loading && activeShowDayEvent && (
+          <section className="mb-6 overflow-hidden rounded-3xl border border-yellow-700/50 bg-gradient-to-br from-yellow-300 to-amber-500 p-5 text-black shadow-lg">
+            <div className="flex items-start justify-between gap-4">
+              <div className="min-w-0">
+                <div className="mb-2 flex items-center gap-2">
+                  <Ticket size={20} />
+                  <p className="text-sm font-black uppercase tracking-wide">
+                    Today&apos;s Show
+                  </p>
+                </div>
+
+                <h2 className="break-words text-2xl font-black leading-tight">
+                  {activeShowDayEvent.event_name} 
+                </h2>
+
+                <p className="mt-2 text-sm font-semibold text-black/70">
+                  {[activeShowDayEvent.venue, activeShowDayEvent.city, activeShowDayEvent.state]
+                    .filter(Boolean)
+                    .join(' · ')}
+                </p>
+              </div>
+
+              {activeShowDayEvent.icon_url ? (
+                <img
+                  src={activeShowDayEvent.icon_url}
+                  alt={activeShowDayEvent.event_name}
+                  className="h-14 w-14 shrink-0 rounded-2xl border border-black/10 bg-white object-cover"
+                />
+              ) : (
+                <div className="flex h-14 w-14 shrink-0 items-center justify-center rounded-2xl bg-black/10">
+                  <CalendarDays size={24} />
+                </div>
+              )}
+            </div>
+
+            <div className="mt-4 grid grid-cols-2 gap-2">
+              <div className="rounded-2xl bg-black/10 p-3">
+                <p className="text-xs font-bold text-black/60">Wishlist matches</p>
+                <p className="mt-1 text-xl font-black">
+                  {Number(activeShowDayEvent.matched_wishlist_item_count || 0)}
+                </p>
+              </div>
+
+              <div className="rounded-2xl bg-black/10 p-3">
+                <p className="text-xs font-bold text-black/60">Vendors</p>
+                <p className="mt-1 text-xl font-black">
+                  {Number(activeShowDayEvent.participating_vendor_count || 0)}
+                </p>
+              </div>
+            </div>
+
+            <p className="mt-3 text-sm font-semibold text-black/75">
+              {Number(activeShowDayEvent.matching_listing_count || 0)} matching vendor listing
+              {Number(activeShowDayEvent.matching_listing_count || 0) === 1 ? '' : 's'}
+              {activeShowDayEvent.is_vendor_show && activeShowDayEvent.booth_number
+                ? ` · Your booth: ${activeShowDayEvent.booth_number}`
+                : ''}
+            </p>
+
+            <div className="mt-4 grid grid-cols-2 gap-2">
+              <Link
+                to={`/map?event=${activeShowDayEvent.event_id}&view=search`}
+                className="flex items-center justify-center gap-2 rounded-xl bg-black p-3 text-sm font-bold text-white"
+              >
+                <Search size={16} />
+                Search This Show
+              </Link>
+
+              <Link
+                to={`/map?event=${activeShowDayEvent.event_id}&view=floorplan`}
+                className="flex items-center justify-center gap-2 rounded-xl border border-black/20 bg-white/80 p-3 text-sm font-bold text-black"
+              >
+                <Map size={16} />
+                View Floorplan
+              </Link>
+            </div>
+          </section>
+        )}
+
         {loading ? (
           <p className="text-sm text-gray-400">Loading dashboard...</p>
         ) : (
@@ -360,6 +493,108 @@ function Dashboard() {
                   title="Admin"
                   subtitle="Manage Vendly"
                 />
+              )}
+            </section>
+
+            <section className="mb-6">
+              <div className="mb-3 flex items-center justify-between">
+                <div>
+                  <div className="flex items-center gap-2">
+                    <Sparkles size={20} className="text-green-300" />
+                    <h2 className="text-xl font-semibold">Wishlist Matches</h2>
+                  </div>
+
+                  {wishlistMatches.length > 0 && (
+                    <p className="mt-1 text-xs text-gray-500">
+                      {wishlistMatches.length} wanted card
+                      {wishlistMatches.length === 1 ? '' : 's'} ·{' '}
+                      {totalWishlistListings} vendor listing
+                      {totalWishlistListings === 1 ? '' : 's'}
+                    </p>
+                  )}
+                </div>
+
+                <Link
+                  to="/inventory"
+                  className="text-xs font-semibold text-yellow-300"
+                >
+                  View wishlist
+                </Link>
+              </div>
+
+              {visibleWishlistMatches.length === 0 ? (
+                <EmptyCard
+                  title="No wishlist matches yet"
+                  message="Add cards to your wishlist and Vendly will show matching vendor inventory from upcoming shows."
+                  to="/search"
+                  action="Add Wishlist Cards"
+                />
+              ) : (
+                <div className="space-y-3">
+                  {visibleWishlistMatches.map((match) => (
+                    <Link
+                      key={match.wishlist_item_id}
+                      to="/inventory"
+                      className="block rounded-2xl border border-green-900/70 bg-green-950/20 p-4 transition hover:bg-green-950/35"
+                    >
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="min-w-0">
+                          <p className="break-words font-bold text-white">
+                            {match.card_name}
+                          </p>
+
+                          <p className="mt-1 text-sm font-semibold text-green-300">
+                            {Number(match.total_matches || 0)}{' '}
+                            {Number(match.total_matches || 0) === 1
+                              ? 'match'
+                              : 'matches'}{' '}
+                            available
+                          </p>
+                        </div>
+
+                        <div className="shrink-0 text-right">
+                          <p className="text-xs text-gray-500">Lowest</p>
+                          <p className="font-bold text-yellow-300">
+                            {match.lowest_price === null ||
+                            match.lowest_price === undefined
+                              ? 'Not listed'
+                              : formatMoney(match.lowest_price)}
+                          </p>
+                        </div>
+                      </div>
+
+                      {match.best_event_name && (
+                        <div className="mt-3 flex items-start gap-2 border-t border-green-900/50 pt-3 text-xs text-gray-300">
+                          <MapPin
+                            size={14}
+                            className="mt-0.5 shrink-0 text-green-300"
+                          />
+                          <p>
+                            {match.best_event_name}
+                            {match.best_booth_number
+                              ? ` · Booth ${match.best_booth_number}`
+                              : ''}
+                            {match.best_is_saved_show ? ' · Saved show' : ''}
+                          </p>
+                        </div>
+                      )}
+                    </Link>
+                  ))}
+
+                  {wishlistMatches.length > visibleWishlistMatches.length && (
+                    <Link
+                      to="/inventory"
+                      className="flex items-center justify-center gap-2 rounded-xl border border-[#222] bg-[#111] p-3 text-sm font-semibold text-gray-300"
+                    >
+                      View {wishlistMatches.length - visibleWishlistMatches.length}{' '}
+                      more matched card
+                      {wishlistMatches.length - visibleWishlistMatches.length === 1
+                        ? ''
+                        : 's'}
+                      <ArrowRight size={15} />
+                    </Link>
+                  )}
+                </div>
               )}
             </section>
 

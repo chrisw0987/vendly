@@ -16,7 +16,7 @@ function Search() {
   const [cards, setCards] = useState([])
   const [currentPage, setCurrentPage] = useState(1)
   const [totalPages, setTotalPages] = useState(1)
-  const RESULTS_PER_PAGE = 20
+  const RESULTS_PER_PAGE = 15
   const [loading, setLoading] = useState(false)
   const [saving, setSaving] = useState(false)
   const [message, setMessage] = useState('')
@@ -363,6 +363,13 @@ function Search() {
     setCards(results)
     setCurrentPage(safePage)
     setTotalPages(data?.pagination?.total_pages || data?.total_pages || 1)
+
+    if (safePage > 1) {
+      window.scrollTo({
+        top: 0,
+        behavior: 'smooth',
+      })
+    }
 
     if (results.length === 0) {
       setMessage('No results found.')
@@ -772,6 +779,34 @@ function Search() {
     return sorted
   }, [cards, sortOption])
 
+  const paginationItems = useMemo(() => {
+    if (totalPages <= 1) return [1]
+
+    const pages = new Set([
+      1,
+      totalPages,
+      currentPage - 1,
+      currentPage,
+      currentPage + 1,
+    ])
+
+    const validPages = [...pages]
+      .filter((page) => page >= 1 && page <= totalPages)
+      .sort((a, b) => a - b)
+
+    const items = []
+
+    validPages.forEach((page, index) => {
+      if (index > 0 && page - validPages[index - 1] > 1) {
+        items.push(`ellipsis-${validPages[index - 1]}-${page}`)
+      }
+
+      items.push(page)
+    })
+
+    return items
+  }, [currentPage, totalPages])
+
   return (
     <div className="min-h-screen bg-black text-white pb-24">
       <main className="mx-auto max-w-[430px] px-5 pt-8">
@@ -1023,27 +1058,53 @@ function Search() {
               })}
             </div>
             
-            <div className="mt-5 flex items-center justify-between gap-3 rounded-2xl border border-[#222] bg-[#111] p-3">
-              <button
-                onClick={() => searchCards(currentPage - 1)}
-                disabled={loading || currentPage <= 1}
-                className="rounded-lg border border-[#222] px-4 py-2 text-sm font-semibold disabled:opacity-40"
-              >
-                Previous
-              </button>
+            <div className="mt-5 rounded-2xl border border-[#222] bg-[#111] p-3">
+              <div className="flex items-center justify-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => searchCards(currentPage - 1)}
+                  disabled={loading || currentPage <= 1}
+                  className="flex h-10 w-10 items-center justify-center rounded-lg border border-[#222] text-sm font-semibold disabled:opacity-30"
+                  aria-label="Previous page"
+                >
+                  ‹‹
+                </button>
 
-              <p className="text-sm text-gray-400">
-                Page <span className="font-bold text-white">{currentPage}</span> of{' '}
-                <span className="font-bold text-white">{totalPages}</span>
-              </p>
+                {paginationItems.map((item) =>
+                  typeof item === 'number' ? (
+                    <button
+                      key={item}
+                      type="button"
+                      onClick={() => searchCards(item)}
+                      disabled={loading || item === currentPage}
+                      className={`flex h-10 min-w-10 items-center justify-center rounded-lg border px-3 text-sm font-bold ${
+                        item === currentPage
+                          ? 'border-white bg-white text-black'
+                          : 'border-[#222] bg-black text-white'
+                      } disabled:cursor-default`}
+                    >
+                      {item}
+                    </button>
+                  ) : (
+                    <span
+                      key={item}
+                      className="flex h-10 min-w-6 items-center justify-center text-sm text-gray-500"
+                    >
+                      …
+                    </span>
+                  )
+                )}
 
-              <button
-                onClick={() => searchCards(currentPage + 1)}
-                disabled={loading || currentPage >= totalPages}
-                className="rounded-lg border border-[#222] px-4 py-2 text-sm font-semibold disabled:opacity-40"
-              >
-                Next
-              </button>
+                <button
+                  type="button"
+                  onClick={() => searchCards(currentPage + 1)}
+                  disabled={loading || currentPage >= totalPages}
+                  className="flex h-10 w-10 items-center justify-center rounded-lg border border-[#222] text-sm font-semibold disabled:opacity-30"
+                  aria-label="Next page"
+                >
+                  ››
+                </button>
+              </div>
             </div>
 
           </section>
@@ -1582,4 +1643,4 @@ function AddModal({
   )
 }
 
-export default Search
+export default Search 

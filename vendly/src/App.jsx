@@ -8,6 +8,7 @@ import Map from './pages/Map'
 import Shows from './pages/Shows'
 import Sales from './pages/Sales'
 import Admin from './pages/Admin'
+import ImportInventory from './pages/ImportInventory'
 import './index.css'
 
 
@@ -20,6 +21,7 @@ function App() {
         <Route path="/dashboard" element={<Dashboard />} />
         <Route path="/search" element={<Search />} />
         <Route path="/inventory" element={<Inventory />} />
+        <Route path="/import-inventory" element={<ImportInventory/>} />
         <Route path="/map" element={<Map />} />
         <Route path="/shows" element={<Shows />} />
         <Route path="/sales" element={<Sales/>} />

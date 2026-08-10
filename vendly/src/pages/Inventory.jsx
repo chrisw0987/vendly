@@ -1,10 +1,12 @@
 import { useEffect, useState } from 'react'
+import { useNavigate } from 'react-router-dom'
 import Navbar from '../components/Navbar'
 import WishlistTab from '../components/inventory/WishlistTab'
 import VendorInventoryTab from '../components/inventory/VendorInventoryTab'
 import { supabase } from '../lib/supabase'
 
 function Inventory() {
+  const navigate = useNavigate()
   const [accountType, setAccountType] = useState('user')
   const [activeTab, setActiveTab] = useState('wishlist')
   const [loadingAccount, setLoadingAccount] = useState(true)
@@ -82,6 +84,7 @@ function Inventory() {
             </button>
           </div>
         )}
+        
 
         {message && (
           <p className="mb-4 rounded-xl border border-red-900 bg-red-950/40 p-3 text-sm font-bold text-red-300">

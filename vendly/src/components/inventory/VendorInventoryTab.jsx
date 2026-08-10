@@ -8,6 +8,7 @@ import {
   Plus,
   Minus,
   CalendarDays,
+  FileUp,
   X,
 } from 'lucide-react'
 import { supabase } from '../../lib/supabase'
@@ -32,7 +33,7 @@ function VendorInventoryTab() {
   const [deleteConfirm, setDeleteConfirm] = useState(null)
 
   const isVendor = accountType === 'vendor' || accountType === 'admin'
-
+  const selectedList = lists.find((list) => list.id === selectedListId) || null
   const [editingItem, setEditingItem] = useState(null)
   const [editForm, setEditForm] = useState({
     quantity: 1,
@@ -1149,6 +1150,15 @@ function VendorInventoryTab() {
               aria-label="Delete inventory list"
             >
               <Trash2 size={18} />
+            </button>
+            <button
+              onClick={() => navigate('/import-inventory')}
+              disabled={!!actionLoading}
+              className="rounded-xl border border-[#222] bg-[#111] p-3 text-white transition hover:border-[#444] hover:bg-[#1a1a1a] disabled:opacity-40"
+              aria-label="Import CSV"
+              title="Import CSV"
+            >
+              <FileUp size={18} />
             </button>
 
             <button

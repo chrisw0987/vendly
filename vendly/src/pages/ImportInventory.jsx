@@ -23,10 +23,13 @@ const VENDLY_FIELDS = [
   { value: 'card_name', label: 'Card Name' },
   { value: 'set_name', label: 'Set Name' },
   { value: 'card_number', label: 'Card Number' },
+  { value: 'rarity', label: 'Rarity' },
+  { value: 'variant', label: 'Variant / Finish' },
   { value: 'item_type', label: 'Item Type' },
   { value: 'condition', label: 'Condition' },
   { value: 'grade_company', label: 'Grade Company' },
   { value: 'grade', label: 'Grade' },
+  { value: 'market_price', label: 'Market Price' },
   { value: 'listing_price', label: 'Listing Price' },
   { value: 'purchase_price', label: 'Purchase Price' },
   { value: 'quantity', label: 'Quantity' },
@@ -34,25 +37,70 @@ const VENDLY_FIELDS = [
 ]
 
 const COLUMN_ALIASES = {
-  card_name: ['card name', 'name', 'product', 'product name', 'card', 'item', 'item name'],
-  set_name: ['set', 'set name', 'expansion', 'series', 'product line'],
-  card_number: ['number', 'card number', 'card #', 'card no', 'collector number', 'collector #'],
-  item_type: ['item type', 'type', 'card type', 'raw graded', 'raw or graded'],
-  condition: ['condition', 'quality', 'card condition'],
-  grade_company: ['grade company', 'grading company', 'grader', 'grading service'],
-  grade: ['grade', 'score', 'numeric grade'],
-  listing_price: ['listing price', 'price', 'asking price', 'sale price', 'sell price'],
-  purchase_price: ['purchase price', 'cost', 'cost basis', 'buy price', 'paid'],
-  quantity: ['quantity', 'qty', 'stock', 'count', 'copies'],
-  physical_location: ['physical location', 'location', 'binder', 'storage location', 'box'],
+  card_name: [
+    'card name', 'name', 'product', 'product name', 'card',
+    'item', 'item name', 'single', 'singles', 'pokemon', 'pokemon name',
+  ],
+  set_name: [
+    'set', 'set name', 'expansion', 'series', 'product line',
+    'set product name', 'product set', 'card set', 'set product',
+    'set title', 'collection',
+  ],
+  card_number: [
+    'number', 'card number', 'card #', 'card no', 'collector number',
+    'collector #', 'collector no', 'set number', 'card id', 'card code',
+  ],
+  rarity: [
+    'rarity', 'card rarity', 'rarity name', 'rarity type',
+  ],
+  variant: [
+    'variant', 'variance', 'finish', 'foil', 'foil type', 'foil finish',
+    'printing', 'printing type', 'card finish', 'surface',
+  ],
+  item_type: [
+    'item type', 'type', 'card type', 'raw graded', 'raw or graded',
+    'raw/graded', 'grading type',
+  ],
+  condition: [
+    'condition', 'quality', 'card condition', 'item condition',
+  ],
+  grade_company: [
+    'grade company', 'grading company', 'grader', 'grading service',
+  ],
+  grade: [
+    'grade', 'score', 'numeric grade', 'grade score',
+  ],
+  market_price: [
+    'market price', 'market value', 'current value', 'current market price',
+    'current market value', 'estimated value', 'estimated market value',
+    'market',
+  ],
+  listing_price: [
+    'listing price', 'price', 'asking price', 'sale price', 'sell price',
+    'selling price', 'list price', 'asking', 'sell for',
+  ],
+  purchase_price: [
+    'purchase price', 'cost', 'cost basis', 'buy price', 'paid',
+    'price paid', 'purchase cost', 'acquisition cost', 'bought for',
+  ],
+  quantity: [
+    'quantity', 'qty', 'stock', 'count', 'copies', 'amount', 'owned', 'units',
+  ],
+  physical_location: [
+    'physical location', 'location', 'binder', 'storage location', 'box',
+    'storage', 'bin', 'shelf', 'case', 'showcase',
+  ],
 }
 
 function normalizeHeader(value) {
   return String(value || '')
     .toLowerCase()
     .trim()
-    .replace(/[_-]+/g, ' ')
+    .replace(/[()\[\]{}]/g, ' ')
+    .replace(/[\/_-]+/g, ' ')
+    .replace(/[.:]+/g, ' ')
     .replace(/\s+/g, ' ')
+    .trim()
 }
 
 function guessVendlyField(header) {
@@ -61,6 +109,41 @@ function guessVendlyField(header) {
   for (const [vendlyField, aliases] of Object.entries(COLUMN_ALIASES)) {
     if (aliases.includes(normalized)) return vendlyField
   }
+
+  if (
+    normalized.includes('set') &&
+    (normalized.includes('product') ||
+      normalized.includes('name') ||
+      normalized.includes('title'))
+  ) return 'set_name'
+
+  if (
+    normalized.includes('market') &&
+    (normalized.includes('price') || normalized.includes('value'))
+  ) return 'market_price'
+
+  if (normalized.includes('rarity')) return 'rarity'
+
+  if (
+    normalized.includes('foil') ||
+    normalized.includes('finish') ||
+    normalized.includes('variant')
+  ) return 'variant'
+
+  if (
+    normalized.includes('card') &&
+    normalized.includes('condition')
+  ) return 'condition'
+
+  if (
+    normalized.includes('card') &&
+    (normalized.includes('number') || normalized.includes('collector'))
+  ) return 'card_number'
+
+  if (
+    normalized.includes('price') &&
+    normalized.includes('paid')
+  ) return 'purchase_price'
 
   return ''
 }
@@ -131,6 +214,7 @@ function ImportInventory() {
   const [message, setMessage] = useState('')
   const [dragActive, setDragActive] = useState(false)
   const [matching, setMatching] = useState(false)
+  const [matchProgress, setMatchProgress] = useState(null)
   const [matchSummary, setMatchSummary] = useState(null)
   const [matchResults, setMatchResults] = useState([])
   const [showColumnSetup, setShowColumnSetup] = useState(false)
@@ -138,6 +222,7 @@ function ImportInventory() {
   const [candidatePages, setCandidatePages] = useState({})
   const [noMoreCandidateRows, setNoMoreCandidateRows] = useState({})
   const [visibleCandidateCounts, setVisibleCandidateCounts] = useState({})
+  const [visibleImportRowCount, setVisibleImportRowCount] = useState(25)
 
   const [inventoryLists, setInventoryLists] = useState([])
   const [selectedInventoryListId, setSelectedInventoryListId] = useState(
@@ -178,11 +263,23 @@ function ImportInventory() {
     grade: '10',
   })
   const [retryingRowNumber, setRetryingRowNumber] = useState(null)
+  const [editingInventoryRow, setEditingInventoryRow] = useState(null)
+  const [inventoryDraft, setInventoryDraft] = useState({
+    item_type: 'raw',
+    condition: 'NM',
+    grade_company: 'PSA',
+    grade: '10',
+    listing_price: '',
+    purchase_price: '',
+    quantity: 1,
+    physical_location: '',
+  })
   const [creatingList, setCreatingList] = useState(false)
   const [newListName, setNewListName] = useState('')
   const [savingNewList, setSavingNewList] = useState(false)
   const [committingImport, setCommittingImport] = useState(false)
   const [importComplete, setImportComplete] = useState(null)
+  const [showImportWarning, setShowImportWarning] = useState(false)
 
   useEffect(() => {
     loadImportSettings()
@@ -302,6 +399,12 @@ function ImportInventory() {
             ? override.card_number
             : mapped.card_number || ''
         ).trim(),
+        rarity: String(
+          override.rarity !== undefined ? override.rarity : mapped.rarity || ''
+        ).trim(),
+        variant: String(
+          override.variant !== undefined ? override.variant : mapped.variant || ''
+        ).trim(),
         item_type:
           override.item_type ||
           normalizeItemType(mapped.item_type, {
@@ -326,10 +429,34 @@ function ImportInventory() {
         grade: String(
           override.grade !== undefined ? override.grade : mapped.grade || ''
         ).trim(),
-        listing_price: parseNumber(mapped.listing_price),
-        purchase_price: parseNumber(mapped.purchase_price),
-        quantity: Math.max(Math.floor(parseNumber(mapped.quantity) || 1), 1),
-        physical_location: String(mapped.physical_location || '').trim(),
+        market_price: parseNumber(
+          override.market_price !== undefined
+            ? override.market_price
+            : mapped.market_price
+        ),
+        listing_price: parseNumber(
+          override.listing_price !== undefined
+            ? override.listing_price
+            : mapped.listing_price
+        ),
+        purchase_price: parseNumber(
+          override.purchase_price !== undefined
+            ? override.purchase_price
+            : mapped.purchase_price
+        ),
+        quantity: Math.max(
+          Math.floor(
+            parseNumber(
+              override.quantity !== undefined ? override.quantity : mapped.quantity
+            ) || 1
+          ),
+          1
+        ),
+        physical_location: String(
+          override.physical_location !== undefined
+            ? override.physical_location
+            : mapped.physical_location || ''
+        ).trim(),
       }
 
       const issues = []
@@ -353,6 +480,14 @@ function ImportInventory() {
         (!normalized.grade_company || !normalized.grade)
       ) {
         warnings.push('Graded item needs company and grade before final import')
+      }
+
+      if (
+        mapped.market_price !== undefined &&
+        mapped.market_price !== '' &&
+        normalized.market_price === null
+      ) {
+        issues.push('Invalid market price')
       }
 
       if (
@@ -397,6 +532,12 @@ function ImportInventory() {
             ? override.card_number
             : row.card_number || ''
         ).trim(),
+        rarity: String(
+          override.rarity !== undefined ? override.rarity : row.rarity || ''
+        ).trim(),
+        variant: String(
+          override.variant !== undefined ? override.variant : row.variant || ''
+        ).trim(),
         item_type: override.item_type || row.item_type || 'raw',
         condition: normalizeCondition(
           override.condition !== undefined ? override.condition : row.condition
@@ -409,10 +550,34 @@ function ImportInventory() {
         grade: String(
           override.grade !== undefined ? override.grade : row.grade || ''
         ).trim(),
-        listing_price: parseNumber(row.listing_price),
-        purchase_price: parseNumber(row.purchase_price),
-        quantity: Math.max(Math.floor(parseNumber(row.quantity) || 1), 1),
-        physical_location: String(row.physical_location || '').trim(),
+        market_price: parseNumber(
+          override.market_price !== undefined
+            ? override.market_price
+            : row.market_price
+        ),
+        listing_price: parseNumber(
+          override.listing_price !== undefined
+            ? override.listing_price
+            : row.listing_price
+        ),
+        purchase_price: parseNumber(
+          override.purchase_price !== undefined
+            ? override.purchase_price
+            : row.purchase_price
+        ),
+        quantity: Math.max(
+          Math.floor(
+            parseNumber(
+              override.quantity !== undefined ? override.quantity : row.quantity
+            ) || 1
+          ),
+          1
+        ),
+        physical_location: String(
+          override.physical_location !== undefined
+            ? override.physical_location
+            : row.physical_location || ''
+        ).trim(),
       }
 
       const issues = []
@@ -456,6 +621,30 @@ function ImportInventory() {
       matchResults.map((result) => [Number(result.row_number), result])
     )
   }, [matchResults])
+
+  const sortedRowsForDisplay = useMemo(() => {
+    const priority = {
+      invalid: 0,
+      not_found: 1,
+      needs_review: 2,
+      matched: 3,
+      unmatched: 4,
+    }
+
+    return [...normalizedRows].sort((a, b) => {
+      const aResult = matchResultsByRow.get(Number(a.row_number))
+      const bResult = matchResultsByRow.get(Number(b.row_number))
+
+      const aStatus = aResult?.status || 'unmatched'
+      const bStatus = bResult?.status || 'unmatched'
+
+      const aPriority = priority[aStatus] ?? 99
+      const bPriority = priority[bStatus] ?? 99
+
+      if (aPriority !== bPriority) return aPriority - bPriority
+      return Number(a.row_number) - Number(b.row_number)
+    })
+  }, [normalizedRows, matchResultsByRow])
 
   const resolvedMatchSummary = useMemo(() => {
     if (!matchResults.length) return matchSummary
@@ -512,6 +701,37 @@ function ImportInventory() {
     0
   )
 
+  const unresolvedMatchCounts = useMemo(
+    () => ({
+      needs_review: matchResults.filter(
+        (result) => result.status === 'needs_review'
+      ).length,
+      not_found: matchResults.filter(
+        (result) => result.status === 'not_found'
+      ).length,
+      invalid: matchResults.filter(
+        (result) => result.status === 'invalid'
+      ).length,
+    }),
+    [matchResults]
+  )
+
+  const unresolvedMatchCount =
+    unresolvedMatchCounts.needs_review +
+    unresolvedMatchCounts.not_found +
+    unresolvedMatchCounts.invalid
+
+  const incompleteGradedCount = normalizedRows.filter((row) => {
+    const result = matchResultsByRow.get(Number(row.row_number))
+
+    return (
+      result?.status === 'matched' &&
+      result?.card &&
+      row.item_type === 'graded' &&
+      (!row.grade_company || !row.grade)
+    )
+  }).length
+
   function toggleShowSelection(showId) {
     setSelectedShowIds((current) =>
       current.includes(showId)
@@ -538,8 +758,10 @@ function ImportInventory() {
 
     setMessage('')
     setParseErrors([])
+    setMatchProgress(null)
     setMatchSummary(null)
     setMatchResults([])
+    setVisibleImportRowCount(25)
     setImportComplete(null)
 
     Papa.parse(file, {
@@ -613,6 +835,7 @@ function ImportInventory() {
     setParseErrors([])
     setMessage('')
     setMatching(false)
+    setMatchProgress(null)
     setMatchSummary(null)
     setMatchResults([])
     setShowColumnSetup(false)
@@ -620,6 +843,8 @@ function ImportInventory() {
     setCandidatePages({})
     setNoMoreCandidateRows({})
     setVisibleCandidateCounts({})
+    setVisibleImportRowCount(25)
+    setVisibleImportRowCount(25)
     setRemovedRowNumbers([])
     setManualRows([])
     setRowOverrides({})
@@ -635,6 +860,17 @@ function ImportInventory() {
       grade: '10',
     })
     setRetryingRowNumber(null)
+    setEditingInventoryRow(null)
+    setInventoryDraft({
+      item_type: 'raw',
+      condition: 'NM',
+      grade_company: 'PSA',
+      grade: '10',
+      listing_price: '',
+      purchase_price: '',
+      quantity: 1,
+      physical_location: '',
+    })
     setNewCardDraft({
       card_name: '',
       set_name: '',
@@ -655,6 +891,7 @@ function ImportInventory() {
     setNewListName('')
     setCommittingImport(false)
     setImportComplete(null)
+    setShowImportWarning(false)
     imageCacheInFlightRef.current.clear()
   }
 
@@ -683,6 +920,29 @@ function ImportInventory() {
         }
       })
     )
+
+    setNewCardMatchResult((current) => {
+      if (!current) return current
+
+      const updatedMatches = Array.isArray(current.matches)
+        ? current.matches.map((candidate) =>
+            candidate?.card_id === cardId
+              ? { ...candidate, image_url: imageUrl }
+              : candidate
+          )
+        : current.matches
+
+      const updatedCard =
+        current.card?.card_id === cardId
+          ? { ...current.card, image_url: imageUrl }
+          : current.card
+
+      return {
+        ...current,
+        card: updatedCard,
+        matches: updatedMatches,
+      }
+    })
   }
 
   async function cacheCandidateImage(candidate) {
@@ -717,38 +977,96 @@ function ImportInventory() {
     }
   }
 
-  async function cacheMatchResultImages(results) {
-    const candidatesById = new Map()
+  async function cacheVisibleMatchImages(
+    results,
+    visibleRowCount = visibleImportRowCount,
+    candidateCountOverrides = visibleCandidateCounts
+  ) {
+    const sorted = [...results].sort((a, b) => {
+      const aResolved = a.status === 'matched'
+      const bResolved = b.status === 'matched'
 
-    results.forEach((result) => {
-      if (result?.card?.card_id && !result.card.image_url) {
-        candidatesById.set(result.card.card_id, result.card)
+      if (aResolved !== bResolved) {
+        return aResolved ? 1 : -1
       }
 
-      ;(result?.matches || []).forEach((candidate) => {
-        if (candidate?.card_id && !candidate.image_url) {
-          candidatesById.set(candidate.card_id, candidate)
-        }
-      })
+      return (
+        Number(a.row_number || 0) -
+        Number(b.row_number || 0)
+      )
     })
 
-    const candidates = Array.from(candidatesById.values())
+    const visibleRows = sorted.slice(0, visibleRowCount)
 
-    const workerCount = Math.min(4, candidates.length)
+    const cardsToCache = []
+    const seen = new Set()
+
+    function addCard(card) {
+      if (!card?.card_id) return
+      if (card.image_url) return
+      if (seen.has(card.card_id)) return
+
+      seen.add(card.card_id)
+      cardsToCache.push(card)
+    }
+
+    visibleRows.forEach((result) => {
+      if (result?.status === 'matched') {
+        addCard(result.card)
+        return
+      }
+
+      if (result?.status === 'needs_review') {
+        const rowNumber = Number(result.row_number)
+        const visibleCount =
+          candidateCountOverrides[rowNumber] ||
+          Math.min(10, result.matches?.length || 0)
+
+        ;(result.matches || [])
+          .slice(0, visibleCount)
+          .forEach(addCard)
+      }
+    })
+
+    if (cardsToCache.length === 0) return
+
     let nextIndex = 0
+    const IMAGE_CONCURRENCY = 4
 
     async function worker() {
-      while (nextIndex < candidates.length) {
-        const currentIndex = nextIndex
+      while (true) {
+        const index = nextIndex
         nextIndex += 1
-        await cacheCandidateImage(candidates[currentIndex])
+
+        if (index >= cardsToCache.length) return
+
+        const card = cardsToCache[index]
+
+        try {
+          await cacheCandidateImage(card)
+        } catch (error) {
+          console.warn(
+            'Visible candidate image cache failed for',
+            card.card_id,
+            error
+          )
+        }
       }
     }
 
     await Promise.all(
-      Array.from({ length: workerCount }, () => worker())
+      Array.from(
+        {
+          length: Math.min(
+            IMAGE_CONCURRENCY,
+            cardsToCache.length
+          ),
+        },
+        () => worker()
+      )
     )
   }
+
 
   async function matchCards() {
     if (matching) return
@@ -765,6 +1083,23 @@ function ImportInventory() {
       return
     }
 
+    const payloadRows = rowsToMatch.map((row) => ({
+      row_number: row.row_number,
+      card_name: row.card_name,
+      set_name: row.set_name,
+      card_number: row.card_number,
+      rarity: row.rarity,
+      variant: row.variant,
+    }))
+
+    const CHUNK_SIZE = 25
+    const CHUNK_CONCURRENCY = 2
+
+    const chunks = []
+    for (let index = 0; index < payloadRows.length; index += CHUNK_SIZE) {
+      chunks.push(payloadRows.slice(index, index + CHUNK_SIZE))
+    }
+
     setMatching(true)
     setMessage('')
     setMatchSummary(null)
@@ -773,56 +1108,187 @@ function ImportInventory() {
     setCandidatePages({})
     setNoMoreCandidateRows({})
     setVisibleCandidateCounts({})
+    setVisibleImportRowCount(25)
+    setMatchProgress({
+      processed: 0,
+      total: payloadRows.length,
+      matched: 0,
+      needs_review: 0,
+      not_found: 0,
+      invalid: 0,
+    })
 
-    const payloadRows = rowsToMatch.map((row) => ({
-      row_number: row.row_number,
-      card_name: row.card_name,
-      set_name: row.set_name,
-      card_number: row.card_number,
-    }))
-
-    const { data, error } = await supabase.functions.invoke(
-      'import-inventory-match',
-      {
-        body: {
-          rows: payloadRows,
-        },
-      }
-    )
-
-    console.log('CSV card match data:', data)
-    console.log('CSV card match error:', error)
-
-    if (error) {
-      console.error('CSV matching failed:', error)
-      setMessage('Card matching failed. Please try again.')
-      setMatching(false)
-      return
+    const allResults = []
+    const aggregateSummary = {
+      total_rows: 0,
+      matched: 0,
+      needs_review: 0,
+      not_found: 0,
+      invalid: 0,
+      cache_only_matches: 0,
+      fresh_api_matches: 0,
+      pokewallet_fallback_calls: 0,
     }
 
-    const nextResults = Array.isArray(data?.results) ? data.results : []
+    async function invokeChunk(chunk, attempt = 1) {
+      const { data, error } = await supabase.functions.invoke(
+        'import-inventory-match',
+        {
+          body: {
+            rows: chunk,
+          },
+        }
+      )
 
-    setMatchSummary(data?.summary || null)
-    setMatchResults(nextResults)
+      if (error) {
+        // Retry one time automatically so a temporary network/API hiccup
+        // does not force the vendor to restart the entire spreadsheet.
+        if (attempt < 2) {
+          return invokeChunk(chunk, attempt + 1)
+        }
 
-    const initialVisibleCounts = {}
-    nextResults.forEach((result) => {
-      if (result?.status === 'needs_review') {
-        initialVisibleCounts[Number(result.row_number)] = Math.min(
-          10,
-          result.matches?.length || 0
-        )
+        throw error
       }
-    })
-    setVisibleCandidateCounts(initialVisibleCounts)
 
-    setMatching(false)
+      return data || {}
+    }
 
-    // Candidate data appears immediately; missing images load in the background.
-    if (nextResults.length > 0) {
-      cacheMatchResultImages(nextResults)
+    let nextChunkIndex = 0
+
+    async function worker() {
+      while (true) {
+        const chunkIndex = nextChunkIndex
+        nextChunkIndex += 1
+
+        if (chunkIndex >= chunks.length) {
+          return
+        }
+
+        const chunk = chunks[chunkIndex]
+        const data = await invokeChunk(chunk)
+
+        const chunkResults = Array.isArray(data?.results)
+          ? data.results
+          : []
+
+        const chunkSummary = data?.summary || {
+          total_rows: chunkResults.length,
+          matched: chunkResults.filter((item) => item.status === 'matched').length,
+          needs_review: chunkResults.filter(
+            (item) => item.status === 'needs_review'
+          ).length,
+          not_found: chunkResults.filter(
+            (item) => item.status === 'not_found'
+          ).length,
+          invalid: chunkResults.filter(
+            (item) => item.status === 'invalid'
+          ).length,
+        }
+
+        allResults.push(...chunkResults)
+
+        aggregateSummary.total_rows += Number(
+          chunkSummary.total_rows ?? chunkResults.length
+        )
+        aggregateSummary.matched += Number(chunkSummary.matched || 0)
+        aggregateSummary.needs_review += Number(
+          chunkSummary.needs_review || 0
+        )
+        aggregateSummary.not_found += Number(chunkSummary.not_found || 0)
+        aggregateSummary.invalid += Number(chunkSummary.invalid || 0)
+        aggregateSummary.cache_only_matches += Number(
+          chunkSummary.cache_only_matches || 0
+        )
+        aggregateSummary.fresh_api_matches += Number(
+          chunkSummary.fresh_api_matches || 0
+        )
+        aggregateSummary.pokewallet_fallback_calls += Number(
+          chunkSummary.pokewallet_fallback_calls || 0
+        )
+
+        // Merge each completed chunk into the UI immediately.
+        setMatchResults((current) => {
+          const next = [...current, ...chunkResults]
+
+          return next.sort(
+            (a, b) =>
+              Number(a.row_number || 0) - Number(b.row_number || 0)
+          )
+        })
+
+        setMatchSummary({ ...aggregateSummary })
+
+        setVisibleCandidateCounts((current) => {
+          const next = { ...current }
+
+          chunkResults.forEach((result) => {
+            if (result?.status === 'needs_review') {
+              next[Number(result.row_number)] = Math.min(
+                10,
+                result.matches?.length || 0
+              )
+            }
+          })
+
+          return next
+        })
+
+        setMatchProgress({
+          processed: Math.min(
+            aggregateSummary.total_rows,
+            payloadRows.length
+          ),
+          total: payloadRows.length,
+          matched: aggregateSummary.matched,
+          needs_review: aggregateSummary.needs_review,
+          not_found: aggregateSummary.not_found,
+          invalid: aggregateSummary.invalid,
+        })
+
+        // Only cache images for currently rendered rows/candidates.
+        // Matching still completes for the full CSV; only image work is lazy.
+        if (chunkResults.length > 0) {
+          cacheVisibleMatchImages(
+            [...allResults],
+            visibleImportRowCount
+          )
+        }
+      }
+    }
+
+    try {
+      await Promise.all(
+        Array.from(
+          { length: Math.min(CHUNK_CONCURRENCY, chunks.length) },
+          () => worker()
+        )
+      )
+
+      const orderedResults = [...allResults].sort(
+        (a, b) =>
+          Number(a.row_number || 0) - Number(b.row_number || 0)
+      )
+
+      setMatchResults(orderedResults)
+      setMatchSummary({ ...aggregateSummary })
+      setMatchProgress({
+        processed: payloadRows.length,
+        total: payloadRows.length,
+        matched: aggregateSummary.matched,
+        needs_review: aggregateSummary.needs_review,
+        not_found: aggregateSummary.not_found,
+        invalid: aggregateSummary.invalid,
+      })
+    } catch (error) {
+      console.error('Chunked CSV matching failed:', error)
+      setMessage(
+        'Card matching hit an error. Completed results were kept, but please try Find My Cards again.'
+      )
+    } finally {
+      setMatching(false)
     }
   }
+
 
   async function showMoreCandidates(row) {
     const rowNumber = Number(row.row_number)
@@ -871,6 +1337,8 @@ function ImportInventory() {
             card_name: row.card_name,
             set_name: row.set_name,
             card_number: row.card_number,
+            rarity: row.rarity,
+            variant: row.variant,
           },
         },
       }
@@ -1047,7 +1515,7 @@ function ImportInventory() {
 
     setNewCardMatchResult(result)
     setNewCardSearching(false)
-    cacheMatchResultImages([result])
+    cacheVisibleMatchImages([result], 1)
   }
 
   function finalizeManualCard(candidate) {
@@ -1233,13 +1701,84 @@ function ImportInventory() {
         }))
       }
 
-      cacheMatchResultImages([retriedResult])
+      cacheVisibleMatchImages([retriedResult], 1)
     }
 
     setEditingIdentityRow(null)
     setRetryingRowNumber(null)
   }
 
+
+  function openInventoryEditor(row) {
+    setEditingInventoryRow(row)
+    setInventoryDraft({
+      item_type: row.item_type || 'raw',
+      condition: row.condition || 'NM',
+      grade_company: row.grade_company || 'PSA',
+      grade: row.grade || '10',
+      listing_price:
+        row.listing_price === null || row.listing_price === undefined
+          ? ''
+          : String(row.listing_price),
+      purchase_price:
+        row.purchase_price === null || row.purchase_price === undefined
+          ? ''
+          : String(row.purchase_price),
+      quantity: Number(row.quantity || 1),
+      physical_location: row.physical_location || '',
+    })
+  }
+
+  function saveInventoryDetails() {
+    if (!editingInventoryRow) return
+
+    const rowNumber = Number(editingInventoryRow.row_number)
+    const quantity = Math.max(
+      Math.floor(Number(inventoryDraft.quantity || 1)),
+      1
+    )
+
+    setRowOverrides((current) => ({
+      ...current,
+      [rowNumber]: {
+        ...(current[rowNumber] || {}),
+        item_type: inventoryDraft.item_type,
+        condition:
+          inventoryDraft.item_type === 'raw'
+            ? inventoryDraft.condition
+            : '',
+        grade_company:
+          inventoryDraft.item_type === 'graded'
+            ? inventoryDraft.grade_company
+            : '',
+        grade:
+          inventoryDraft.item_type === 'graded'
+            ? inventoryDraft.grade
+            : '',
+        listing_price:
+          inventoryDraft.listing_price === ''
+            ? null
+            : inventoryDraft.listing_price,
+        purchase_price:
+          inventoryDraft.purchase_price === ''
+            ? null
+            : inventoryDraft.purchase_price,
+        quantity,
+        physical_location: inventoryDraft.physical_location.trim(),
+      },
+    }))
+
+    setEditingInventoryRow(null)
+  }
+
+  function requestImportCommit() {
+    if (unresolvedMatchCount > 0 || incompleteGradedCount > 0) {
+      setShowImportWarning(true)
+      return
+    }
+
+    commitImport()
+  }
 
   async function commitImport() {
     if (committingImport) return
@@ -1267,9 +1806,11 @@ function ImportInventory() {
         rarity: card?.rarity || null,
         image_url: card?.image_url || null,
         market_price:
-          card?.market_price === null || card?.market_price === undefined
-            ? null
-            : Number(card.market_price),
+          row.market_price !== null && row.market_price !== undefined
+            ? Number(row.market_price)
+            : card?.market_price === null || card?.market_price === undefined
+              ? null
+              : Number(card.market_price),
         item_type: row.item_type || 'raw',
         condition: row.item_type === 'raw' ? row.condition || null : null,
         grade_company:
@@ -1664,18 +2205,101 @@ function ImportInventory() {
                 disabled={matching || readyCount === 0}
                 className="mt-4 w-full rounded-xl bg-white p-4 text-sm font-bold text-black disabled:opacity-50"
               >
-                {matching
-                  ? `Finding ${readyCount} card${readyCount === 1 ? '' : 's'}...`
+                {matching && matchProgress
+                  ? `Finding Cards... ${matchProgress.processed}/${matchProgress.total}`
                   : `Find My ${readyCount} Card${readyCount === 1 ? '' : 's'}`}
               </button>
+
+              {matching && matchProgress && (
+                <div className="mt-4 rounded-xl border border-blue-900 bg-blue-950/20 p-4">
+                  <div className="flex items-center justify-between gap-3">
+                    <p className="text-sm font-bold text-blue-200">
+                      Finding your cards...
+                    </p>
+                    <p className="text-sm font-bold text-white">
+                      {matchProgress.processed}/{matchProgress.total}
+                    </p>
+                  </div>
+
+                  <div className="mt-3 h-2 overflow-hidden rounded-full bg-black">
+                    <div
+                      className="h-full rounded-full bg-white transition-all duration-300"
+                      style={{
+                        width: `${
+                          matchProgress.total > 0
+                            ? Math.round(
+                                (matchProgress.processed /
+                                  matchProgress.total) *
+                                  100
+                              )
+                            : 0
+                        }%`,
+                      }}
+                    />
+                  </div>
+
+                  <div className="mt-3 grid grid-cols-4 gap-2 text-center text-xs">
+                    <div>
+                      <p className="font-bold text-green-300">
+                        {matchProgress.matched}
+                      </p>
+                      <p className="mt-1 text-gray-500">Matched</p>
+                    </div>
+                    <div>
+                      <p className="font-bold text-yellow-300">
+                        {matchProgress.needs_review}
+                      </p>
+                      <p className="mt-1 text-gray-500">Review</p>
+                    </div>
+                    <div>
+                      <p className="font-bold text-red-300">
+                        {matchProgress.not_found}
+                      </p>
+                      <p className="mt-1 text-gray-500">Not Found</p>
+                    </div>
+                    <div>
+                      <p className="font-bold text-red-300">
+                        {matchProgress.invalid}
+                      </p>
+                      <p className="mt-1 text-gray-500">Invalid</p>
+                    </div>
+                  </div>
+                </div>
+              )}
             </section>
 
+            {resolvedMatchSummary && (
+              <section className="rounded-2xl border border-[#222] bg-[#111] p-4">
+                <h2 className="text-lg font-bold">Match Results</h2>
+
+                <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-4">
+                  <PreviewStat label="Matched" value={resolvedMatchSummary.matched || 0} />
+                  <PreviewStat label="Needs Review" value={resolvedMatchSummary.needs_review || 0} />
+                  <PreviewStat label="Not Found" value={resolvedMatchSummary.not_found || 0} />
+                  <PreviewStat label="Invalid" value={resolvedMatchSummary.invalid || 0} />
+                </div>
+
+                <p className="mt-3 text-sm text-gray-500">
+                  Review any unresolved cards below before importing.
+                </p>
+              </section>
+            )}
+
+            {resolvedMatchSummary && !importComplete && (
+              <div className="rounded-2xl border border-blue-900 bg-blue-950/20 p-4 text-sm text-blue-200">
+                Only fully matched, valid rows will be submitted. Anything unresolved
+                will be skipped unless you fix it first.
+              </div>
+            )}
+
+            {matchResults.length > 0 && (
             <section>
               <div className="mb-3 flex items-end justify-between gap-4">
                 <div>
                   <h2 className="text-xl font-bold">Cards Found</h2>
                   <p className="mt-1 text-sm text-gray-400">
-                    Vendly prepared these rows from your spreadsheet.
+                    Review anything that needs attention first. Matched cards are
+                    shown afterward.
                   </p>
                 </div>
 
@@ -1690,7 +2314,9 @@ function ImportInventory() {
               </div>
 
               <div className="space-y-3">
-                {normalizedRows.slice(0, 25).map((row) => (
+                {sortedRowsForDisplay
+                  .slice(0, visibleImportRowCount)
+                  .map((row) => (
                   <div
                     key={row.row_number}
                     className={`rounded-2xl border p-4 ${
@@ -1760,6 +2386,25 @@ function ImportInventory() {
                       />
                     </div>
 
+                    {(row.rarity || row.variant) && (
+                      <p className="mt-2 text-xs text-gray-500">
+                        Match hints:{' '}
+                        <span className="text-gray-300">
+                          {[row.rarity, row.variant].filter(Boolean).join(' · ')}
+                        </span>
+                      </p>
+                    )}
+
+                    {row.market_price !== null &&
+                      row.market_price !== undefined && (
+                        <p className="mt-2 text-xs text-gray-500">
+                          Spreadsheet market price:{' '}
+                          <span className="font-semibold text-yellow-300">
+                            ${Number(row.market_price).toFixed(2)}
+                          </span>
+                        </p>
+                      )}
+
                     {row.warnings?.length > 0 && (
                       <div className="mt-3 rounded-xl border border-yellow-900/60 bg-yellow-950/10 p-3">
                         <div className="flex items-center justify-between gap-3">
@@ -1816,30 +2461,41 @@ function ImportInventory() {
                           </div>
 
                           {result?.status === 'matched' && (
-                            <div className="mt-2 flex items-center justify-between gap-3">
+                            <div className="mt-2 flex items-start justify-between gap-3">
                               {result?.manually_selected ? (
-                                <p className="text-xs font-semibold text-green-300">
+                                <p className="pt-2 text-xs font-semibold text-green-300">
                                   You selected this match.
                                 </p>
                               ) : (
-                                <p className="text-xs text-[#8ea3c7]">
+                                <p className="pt-2 text-xs text-[#8ea3c7]">
                                   Vendly matched this card automatically.
                                 </p>
                               )}
 
-                              <button
-                                type="button"
-                                onClick={() => reselectCandidate(row.row_number)}
-                                className={
-                                  result?.manually_selected
-                                    ? 'shrink-0 rounded-lg border border-[#333] bg-black px-3 py-2 text-xs font-bold text-white transition hover:border-[#555]'
-                                    : 'shrink-0 text-xs font-semibold text-[#78b7ff] transition hover:text-white'
-                                }
-                              >
-                                {result?.manually_selected
-                                  ? 'Re-select'
-                                  : 'Not the right card?'}
-                              </button>
+                              <div className="flex shrink-0 flex-wrap justify-end gap-2">
+                                <button
+                                  type="button"
+                                  onClick={() => openInventoryEditor(row)}
+                                  className="inline-flex items-center gap-1 rounded-lg border border-[#333] bg-black px-3 py-2 text-xs font-bold text-white transition hover:border-[#555]"
+                                >
+                                  <Pencil size={13} />
+                                  Edit details
+                                </button>
+
+                                <button
+                                  type="button"
+                                  onClick={() => reselectCandidate(row.row_number)}
+                                  className={
+                                    result?.manually_selected
+                                      ? 'rounded-lg border border-[#333] bg-black px-3 py-2 text-xs font-bold text-white transition hover:border-[#555]'
+                                      : 'rounded-lg border border-[#333] bg-black px-3 py-2 text-xs font-semibold text-[#78b7ff] transition hover:border-[#555] hover:text-white'
+                                  }
+                                >
+                                  {result?.manually_selected
+                                    ? 'Re-select'
+                                    : 'Not the right card?'}
+                                </button>
+                              </div>
                             </div>
                           )}
 
@@ -2027,10 +2683,61 @@ function ImportInventory() {
                 ))}
               </div>
 
-              {normalizedRows.length > 25 && (
-                <p className="mt-3 text-center text-xs text-gray-500">
-                  Showing the first 25 of {normalizedRows.length} rows.
-                </p>
+              {sortedRowsForDisplay.length > 0 && (
+                <div className="mt-4">
+                  <p className="text-center text-xs text-gray-500">
+                    Showing {Math.min(visibleImportRowCount, sortedRowsForDisplay.length)} of{' '}
+                    {sortedRowsForDisplay.length} cards.
+                    {unresolvedMatchCount > 0
+                      ? ' Cards needing attention are shown first.'
+                      : ''}
+                  </p>
+
+                  {visibleImportRowCount < sortedRowsForDisplay.length && (
+                    <div className="mt-3 grid grid-cols-2 gap-2">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const nextCount = Math.min(
+                            visibleImportRowCount + 25,
+                            sortedRowsForDisplay.length
+                          )
+
+                          setVisibleImportRowCount(nextCount)
+
+                          setTimeout(() => {
+                            cacheVisibleMatchImages(
+                              matchResults,
+                              nextCount
+                            )
+                          }, 0)
+                        }}
+                        className="rounded-xl border border-[#333] bg-[#111] p-3 text-sm font-bold text-white transition hover:border-[#555]"
+                      >
+                        Load More
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const nextCount = sortedRowsForDisplay.length
+
+                          setVisibleImportRowCount(nextCount)
+
+                          setTimeout(() => {
+                            cacheVisibleMatchImages(
+                              matchResults,
+                              nextCount
+                            )
+                          }, 0)
+                        }}
+                        className="rounded-xl border border-[#333] bg-[#111] p-3 text-sm font-bold text-white transition hover:border-[#555]"
+                      >
+                        Load All
+                      </button>
+                    </div>
+                  )}
+                </div>
               )}
 
               {!addingCard ? (
@@ -2353,7 +3060,286 @@ function ImportInventory() {
                 </div>
               )}
             </section>
+            )}
 
+
+            {showImportWarning && (
+              <div className="fixed inset-0 z-[70] flex items-center justify-center bg-black/80 p-5">
+                <div className="w-full max-w-sm rounded-2xl border border-yellow-900 bg-[#111] p-5">
+                  <div className="flex items-start gap-3">
+                    <AlertTriangle size={22} className="mt-0.5 shrink-0 text-yellow-300" />
+                    <div>
+                      <h2 className="text-lg font-bold">Some cards will be skipped</h2>
+                      <p className="mt-1 text-sm text-gray-400">
+                        Vendly will only import cards that are fully matched and ready.
+                      </p>
+                    </div>
+                  </div>
+
+                  <div className="mt-4 space-y-2 rounded-xl border border-[#333] bg-black p-3 text-sm">
+                    {unresolvedMatchCounts.needs_review > 0 && (
+                      <div className="flex justify-between gap-3">
+                        <span className="text-gray-400">Needs Review</span>
+                        <span className="font-bold text-yellow-300">{unresolvedMatchCounts.needs_review}</span>
+                      </div>
+                    )}
+                    {unresolvedMatchCounts.not_found > 0 && (
+                      <div className="flex justify-between gap-3">
+                        <span className="text-gray-400">Not Found</span>
+                        <span className="font-bold text-red-300">{unresolvedMatchCounts.not_found}</span>
+                      </div>
+                    )}
+                    {unresolvedMatchCounts.invalid > 0 && (
+                      <div className="flex justify-between gap-3">
+                        <span className="text-gray-400">Invalid</span>
+                        <span className="font-bold text-red-300">{unresolvedMatchCounts.invalid}</span>
+                      </div>
+                    )}
+                    {incompleteGradedCount > 0 && (
+                      <div className="flex justify-between gap-3">
+                        <span className="text-gray-400">Incomplete Graded Cards</span>
+                        <span className="font-bold text-yellow-300">{incompleteGradedCount}</span>
+                      </div>
+                    )}
+                  </div>
+
+                  <p className="mt-4 text-sm text-gray-300">
+                    Continue with the {importableQuantityTotal} ready card
+                    {importableQuantityTotal === 1 ? '' : 's'} and skip the rest?
+                  </p>
+
+                  <div className="mt-5 grid grid-cols-2 gap-3">
+                    <button
+                      type="button"
+                      onClick={() => setShowImportWarning(false)}
+                      className="rounded-xl border border-[#333] bg-black p-3 text-sm font-bold text-gray-300"
+                    >
+                      Go Back
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setShowImportWarning(false)
+                        commitImport()
+                      }}
+                      className="rounded-xl bg-white p-3 text-sm font-bold text-black"
+                    >
+                      Import Ready Cards
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {editingInventoryRow && (
+              <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-5">
+                <div className="max-h-[90dvh] w-full max-w-sm overflow-y-auto rounded-2xl border border-[#333] bg-[#111] p-5">
+                  <div className="flex items-start justify-between gap-3">
+                    <div>
+                      <h2 className="text-lg font-bold">Edit Inventory Details</h2>
+                      <p className="mt-1 text-xs text-gray-500">
+                        This changes condition, grading, pricing, quantity, and
+                        location without changing which Pokémon card was matched.
+                      </p>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => setEditingInventoryRow(null)}
+                      className="rounded-lg p-2 text-gray-500 hover:text-white"
+                    >
+                      <X size={18} />
+                    </button>
+                  </div>
+
+                  <p className="mt-4 text-xs font-semibold text-gray-400">
+                    Card Type
+                  </p>
+                  <div className="mt-1 grid grid-cols-2 rounded-xl border border-[#333] bg-black p-1">
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setInventoryDraft((current) => ({
+                          ...current,
+                          item_type: 'raw',
+                        }))
+                      }
+                      className={`rounded-lg px-3 py-2 text-sm font-bold ${
+                        inventoryDraft.item_type === 'raw'
+                          ? 'bg-white text-black'
+                          : 'text-gray-500'
+                      }`}
+                    >
+                      Raw
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setInventoryDraft((current) => ({
+                          ...current,
+                          item_type: 'graded',
+                        }))
+                      }
+                      className={`rounded-lg px-3 py-2 text-sm font-bold ${
+                        inventoryDraft.item_type === 'graded'
+                          ? 'bg-white text-black'
+                          : 'text-gray-500'
+                      }`}
+                    >
+                      Graded
+                    </button>
+                  </div>
+
+                  {inventoryDraft.item_type === 'raw' ? (
+                    <>
+                      <label className="mt-3 block text-xs font-semibold text-gray-400">
+                        Condition
+                      </label>
+                      <select
+                        value={inventoryDraft.condition}
+                        onChange={(event) =>
+                          setInventoryDraft((current) => ({
+                            ...current,
+                            condition: event.target.value,
+                          }))
+                        }
+                        className="mt-1 w-full rounded-xl border border-[#333] bg-black p-3 text-sm text-white outline-none"
+                      >
+                        <option value="NM">Near Mint</option>
+                        <option value="LP">Lightly Played</option>
+                        <option value="MP">Moderately Played</option>
+                        <option value="HP">Heavily Played</option>
+                        <option value="DMG">Damaged</option>
+                      </select>
+                    </>
+                  ) : (
+                    <div className="mt-3 grid grid-cols-2 gap-2">
+                      <div>
+                        <label className="block text-xs font-semibold text-gray-400">
+                          Grade Company
+                        </label>
+                        <select
+                          value={inventoryDraft.grade_company}
+                          onChange={(event) =>
+                            setInventoryDraft((current) => ({
+                              ...current,
+                              grade_company: event.target.value,
+                            }))
+                          }
+                          className="mt-1 w-full rounded-xl border border-[#333] bg-black p-3 text-sm text-white outline-none"
+                        >
+                          <option value="PSA">PSA</option>
+                          <option value="CGC">CGC</option>
+                          <option value="Beckett">Beckett</option>
+                          <option value="SGC">SGC</option>
+                          <option value="TAG">TAG</option>
+                          <option value="Other">Other</option>
+                        </select>
+                      </div>
+
+                      <div>
+                        <label className="block text-xs font-semibold text-gray-400">
+                          Grade
+                        </label>
+                        <select
+                          value={inventoryDraft.grade}
+                          onChange={(event) =>
+                            setInventoryDraft((current) => ({
+                              ...current,
+                              grade: event.target.value,
+                            }))
+                          }
+                          className="mt-1 w-full rounded-xl border border-[#333] bg-black p-3 text-sm text-white outline-none"
+                        >
+                          {['10','9.5','9','8.5','8','7.5','7','6.5','6','5','4','3','2','1'].map(
+                            (grade) => (
+                              <option key={grade} value={grade}>
+                                {grade}
+                              </option>
+                            )
+                          )}
+                        </select>
+                      </div>
+                    </div>
+                  )}
+
+                  <label className="mt-3 block text-xs font-semibold text-gray-400">
+                    Listing Price
+                  </label>
+                  <input
+                    type="number"
+                    min="0"
+                    step="0.01"
+                    value={inventoryDraft.listing_price}
+                    onChange={(event) =>
+                      setInventoryDraft((current) => ({
+                        ...current,
+                        listing_price: event.target.value,
+                      }))
+                    }
+                    placeholder="Optional"
+                    className="mt-1 w-full rounded-xl border border-[#333] bg-black p-3 text-sm text-white outline-none"
+                  />
+
+                  <label className="mt-3 block text-xs font-semibold text-gray-400">
+                    Purchase Price
+                  </label>
+                  <input
+                    type="number"
+                    min="0"
+                    step="0.01"
+                    value={inventoryDraft.purchase_price}
+                    onChange={(event) =>
+                      setInventoryDraft((current) => ({
+                        ...current,
+                        purchase_price: event.target.value,
+                      }))
+                    }
+                    placeholder="Optional"
+                    className="mt-1 w-full rounded-xl border border-[#333] bg-black p-3 text-sm text-white outline-none"
+                  />
+
+                  <label className="mt-3 block text-xs font-semibold text-gray-400">
+                    Quantity
+                  </label>
+                  <input
+                    type="number"
+                    min="1"
+                    step="1"
+                    value={inventoryDraft.quantity}
+                    onChange={(event) =>
+                      setInventoryDraft((current) => ({
+                        ...current,
+                        quantity: event.target.value,
+                      }))
+                    }
+                    className="mt-1 w-full rounded-xl border border-[#333] bg-black p-3 text-sm text-white outline-none"
+                  />
+
+                  <label className="mt-3 block text-xs font-semibold text-gray-400">
+                    Physical Location
+                  </label>
+                  <input
+                    value={inventoryDraft.physical_location}
+                    onChange={(event) =>
+                      setInventoryDraft((current) => ({
+                        ...current,
+                        physical_location: event.target.value,
+                      }))
+                    }
+                    placeholder="Example: Binder 1, Row 2"
+                    className="mt-1 w-full rounded-xl border border-[#333] bg-black p-3 text-sm text-white outline-none"
+                  />
+
+                  <button
+                    type="button"
+                    onClick={saveInventoryDetails}
+                    className="mt-4 w-full rounded-xl bg-white p-3 text-sm font-bold text-black"
+                  >
+                    Save Details
+                  </button>
+                </div>
+              </div>
+            )}
 
             {editingIdentityRow && (
               <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-5">
@@ -2744,7 +3730,7 @@ function ImportInventory() {
 
                   <button
                     type="button"
-                    onClick={commitImport}
+                    onClick={requestImportCommit}
                     disabled={
                       committingImport ||
                       importableRows.length === 0 ||
@@ -2807,42 +3793,6 @@ function ImportInventory() {
               </section>
             )}
 
-            {resolvedMatchSummary && (
-              <section className="rounded-2xl border border-[#222] bg-[#111] p-4">
-                <h2 className="text-lg font-bold">Match Results</h2>
-
-                <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-4">
-                  <PreviewStat
-                    label="Matched"
-                    value={resolvedMatchSummary.matched || 0}
-                  />
-                  <PreviewStat
-                    label="Needs Review"
-                    value={resolvedMatchSummary.needs_review || 0}
-                  />
-                  <PreviewStat
-                    label="Not Found"
-                    value={resolvedMatchSummary.not_found || 0}
-                  />
-                  <PreviewStat
-                    label="Invalid"
-                    value={resolvedMatchSummary.invalid || 0}
-                  />
-                </div>
-
-                <p className="mt-3 text-sm text-gray-500">
-                  Any yellow cards above only need one tap. Pick the right printing
-                  and Vendly will mark it as matched.
-                </p>
-              </section>
-            )}
-
-            {!importComplete && (
-              <div className="rounded-2xl border border-blue-900 bg-blue-950/20 p-4 text-sm text-blue-200">
-                Review the matched cards and import settings carefully. Only fully
-                matched, valid rows will be submitted.
-              </div>
-            )}
           </div>
         )}
       </main>

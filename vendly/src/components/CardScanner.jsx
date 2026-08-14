@@ -111,16 +111,46 @@ function CardScanner({ open, onClose, onConfirm }) {
     const video = videoRef.current
     if (!video || !video.videoWidth || !video.videoHeight) return
 
+    // IMPORTANT:
+    // Capture the card-shaped area in the CENTER of the camera instead of
+    // OCRing the entire camera frame. The yellow guide is centered, so this
+    // keeps the card itself as the image Vendly analyzes.
+    const sourceWidth = video.videoWidth
+    const sourceHeight = video.videoHeight
+    const cardAspect = 2.5 / 3.5
+
+    let cropWidth = sourceWidth * 0.72
+    let cropHeight = cropWidth / cardAspect
+
+    // If the calculated crop is too tall, constrain by height instead.
+    if (cropHeight > sourceHeight * 0.82) {
+      cropHeight = sourceHeight * 0.82
+      cropWidth = cropHeight * cardAspect
+    }
+
+    const sx = Math.max(0, (sourceWidth - cropWidth) / 2)
+    const sy = Math.max(0, (sourceHeight - cropHeight) / 2)
+
     const canvas = document.createElement('canvas')
-    canvas.width = video.videoWidth
-    canvas.height = video.videoHeight
+    canvas.width = Math.round(cropWidth)
+    canvas.height = Math.round(cropHeight)
 
     const context = canvas.getContext('2d')
     if (!context) return
 
-    context.drawImage(video, 0, 0, canvas.width, canvas.height)
+    context.drawImage(
+      video,
+      sx,
+      sy,
+      cropWidth,
+      cropHeight,
+      0,
+      0,
+      canvas.width,
+      canvas.height
+    )
 
-    const imageDataUrl = canvas.toDataURL('image/jpeg', 0.9)
+    const imageDataUrl = canvas.toDataURL('image/jpeg', 0.95)
     setCapturedImage(imageDataUrl)
     stopCamera()
   }
@@ -288,7 +318,7 @@ function CardScanner({ open, onClose, onConfirm }) {
           {!cameraError && !capturedImage && (
             <div className="pt-5 text-center">
               <p className="text-sm text-gray-300">
-                Keep the whole card visible and avoid glare.
+                Fill the yellow frame with the card and avoid glare.
               </p>
 
               <button

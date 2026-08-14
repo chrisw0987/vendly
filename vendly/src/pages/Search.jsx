@@ -997,6 +997,18 @@ function Search() {
           )
         )
 
+        setScanCandidates((currentCandidates) =>
+          currentCandidates.map((currentCard) =>
+            getCardId(currentCard) === cardId
+              ? {
+                  ...currentCard,
+                  image_url: data.image_url,
+                  displayed_image_language: data.served_language,
+                }
+              : currentCard
+          )
+        )
+
         return
       }
 
@@ -1018,6 +1030,17 @@ function Search() {
 
       setCards((currentCards) =>
         currentCards.map((currentCard) =>
+          getCardId(currentCard) === cardId
+            ? {
+                ...currentCard,
+                image_url: data.image_url,
+              }
+            : currentCard
+        )
+      )
+
+      setScanCandidates((currentCandidates) =>
+        currentCandidates.map((currentCard) =>
           getCardId(currentCard) === cardId
             ? {
                 ...currentCard,

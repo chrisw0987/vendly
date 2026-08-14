@@ -1,30 +1,59 @@
 import { useEffect, useMemo, useState } from 'react'
 import { supabase } from '../lib/supabase'
 import Navbar from '../components/Navbar'
+import CardScanner from '../components/CardScanner'
+
+// Keeps Search state while the user navigates around the SPA.
+// Because this lives only in the loaded JavaScript module, a full browser
+// refresh clears it automatically.
+let searchPageMemory = null
 
 import {
   Search as SearchIcon,
   ArrowUpDown,
   SlidersHorizontal,
+  Funnel,
+  ChevronDown,
   Plus,
   CalendarDays,
   X,
+  Flame,
+  TrendingUp,
+  Sparkles,
+  ArrowRight,
+  Camera,
 } from 'lucide-react'
 
 function Search() {
   const [search, setSearch] = useState('')
+  const [activeSearchQuery, setActiveSearchQuery] = useState('')
   const [cards, setCards] = useState([])
   const [currentPage, setCurrentPage] = useState(1)
   const [totalPages, setTotalPages] = useState(1)
+  const [totalResults, setTotalResults] = useState(0)
   const RESULTS_PER_PAGE = 15
   const [loading, setLoading] = useState(false)
+  const [showCardScanner, setShowCardScanner] = useState(false)
+  const [capturedScanImage, setCapturedScanImage] = useState('')
+  const [scanCandidates, setScanCandidates] = useState([])
+  const [scanDetected, setScanDetected] = useState(null)
+  const [showScanMatches, setShowScanMatches] = useState(false)
+  const [matchingScan, setMatchingScan] = useState(false)
   const [saving, setSaving] = useState(false)
   const [message, setMessage] = useState('')
 
   const [sortOption, setSortOption] = useState('')
   const [filterOption, setFilterOption] = useState('cards')
+  const [cardTypeFilters, setCardTypeFilters] = useState([])
+  const [rarityFilters, setRarityFilters] = useState([])
+  const [setFilters, setSetFilters] = useState([])
+  const [languageFilters, setLanguageFilters] = useState([])
+  const [filterFacets, setFilterFacets] = useState(null)
+  const [loadingFilterFacets, setLoadingFilterFacets] = useState(false)
   const [showSortMenu, setShowSortMenu] = useState(false)
   const [showFilterMenu, setShowFilterMenu] = useState(false)
+  const [showAdvancedFilterMenu, setShowAdvancedFilterMenu] = useState(false)
+  const [openAdvancedDropdown, setOpenAdvancedDropdown] = useState('')
 
   const [inventoryCounts, setInventoryCounts] = useState({})
   const [lists, setLists] = useState([])
@@ -54,16 +83,114 @@ function Search() {
   const [vendorShows, setVendorShows] = useState([])
   const [selectedShowIds, setSelectedShowIds] = useState([])
   const [accountType, setAccountType] = useState('user')
+  const [searchStateRestored, setSearchStateRestored] = useState(false)
+
+  const [discovery, setDiscovery] = useState({
+    recent_sets: [],
+    top_movers: [],
+    trending_sets: [],
+  })
+  const [loadingDiscovery, setLoadingDiscovery] = useState(false)
+  const [discoveryLoaded, setDiscoveryLoaded] = useState(false)
 
   const isVendor = accountType === 'vendor' || accountType === 'admin'
 
   useEffect(() => {
+    if (searchPageMemory) {
+      const saved = searchPageMemory
+
+      if (typeof saved.search === 'string') setSearch(saved.search)
+      if (typeof saved.activeSearchQuery === 'string') {
+        setActiveSearchQuery(saved.activeSearchQuery)
+      }
+      if (Array.isArray(saved.cards)) setCards(saved.cards)
+      if (Number.isInteger(saved.currentPage) && saved.currentPage > 0) {
+        setCurrentPage(saved.currentPage)
+      }
+      if (Number.isInteger(saved.totalPages) && saved.totalPages > 0) {
+        setTotalPages(saved.totalPages)
+      }
+      if (Number.isInteger(saved.totalResults) && saved.totalResults >= 0) {
+        setTotalResults(saved.totalResults)
+      }
+      if (typeof saved.sortOption === 'string') setSortOption(saved.sortOption)
+      if (saved.filterOption === 'cards' || saved.filterOption === 'sealed') {
+        setFilterOption(saved.filterOption)
+      }
+      if (Array.isArray(saved.cardTypeFilters)) {
+        setCardTypeFilters(saved.cardTypeFilters)
+      }
+      if (Array.isArray(saved.rarityFilters)) {
+        setRarityFilters(saved.rarityFilters)
+      }
+      if (Array.isArray(saved.setFilters)) {
+        setSetFilters(saved.setFilters)
+      }
+      if (Array.isArray(saved.languageFilters)) {
+        setLanguageFilters(saved.languageFilters)
+      }
+      if (saved.filterFacets && typeof saved.filterFacets === 'object') {
+        setFilterFacets(saved.filterFacets)
+      }
+    }
+
+    setSearchStateRestored(true)
+
     fetchAccountType()
     fetchInventoryCounts()
     fetchInventoryLists()
     fetchWishlistLists()
     fetchVendorShows()
+    loadDiscovery()
+
+    const {
+      data: { subscription },
+    } = supabase.auth.onAuthStateChange((event) => {
+      if (event === 'SIGNED_OUT') {
+        searchPageMemory = null
+      }
+    })
+
+    return () => {
+      subscription?.unsubscribe()
+    }
   }, [])
+
+  useEffect(() => {
+    if (!searchStateRestored) return
+
+    searchPageMemory = {
+      search,
+      activeSearchQuery,
+      cards,
+      currentPage,
+      totalPages,
+      totalResults,
+      sortOption,
+      filterOption,
+      cardTypeFilters,
+      rarityFilters,
+      setFilters,
+      languageFilters,
+      filterFacets,
+    }
+  }, [
+    searchStateRestored,
+    search,
+    activeSearchQuery,
+    cards,
+    currentPage,
+    totalPages,
+    totalResults,
+    sortOption,
+    filterOption,
+    cardTypeFilters,
+    rarityFilters,
+    setFilters,
+    languageFilters,
+    filterFacets,
+  ])
+
 
   function getCardId(card) {
     return (
@@ -104,6 +231,155 @@ function Search() {
     return card?.card_info?.rarity || card?.rarity || 'Rarity N/A'
   }
 
+  function normalizeRarity(rarity) {
+    const value = String(rarity || '').trim().toLowerCase()
+
+    const aliases = {
+      ir: 'Illustration Rare',
+      'illustration rare': 'Illustration Rare',
+      sir: 'Special Illustration Rare',
+      'special illustration rare': 'Special Illustration Rare',
+      'double rare': 'Double Rare',
+      'ultra rare': 'Ultra Rare',
+      'hyper rare': 'Hyper Rare',
+      'ace spec rare': 'ACE SPEC Rare',
+      'ace spec': 'ACE SPEC Rare',
+      rare: 'Rare',
+      uncommon: 'Uncommon',
+      common: 'Common',
+      promo: 'Promo',
+      'code card': 'Code Card',
+    }
+
+    return aliases[value] || String(rarity || '').trim()
+  }
+
+  function getCardType(card) {
+    const raw =
+      card?.card_info?.supertype ||
+      card?.card_info?.card_type ||
+      card?.supertype ||
+      card?.card_type ||
+      card?.type ||
+      ''
+
+    const value = String(raw || '').trim().toLowerCase()
+
+    if (!value) return 'Unknown'
+    if (value.includes('pokémon') || value.includes('pokemon')) return 'Pokémon'
+    if (value.includes('supporter')) return 'Supporter'
+    if (value.includes('stadium')) return 'Stadium'
+    if (value.includes('tool')) return 'Tool'
+    if (value.includes('energy')) return 'Energy'
+    if (value.includes('item')) return 'Item'
+    if (value.includes('trainer')) return 'Trainer'
+
+    return String(raw).trim()
+  }
+
+  function getCardLanguages(card) {
+    const rawLanguages = Array.isArray(card?.image_languages)
+      ? card.image_languages
+      : Array.isArray(card?.images?.languages)
+      ? card.images.languages
+      : []
+
+    const directLanguage =
+      card?.set_language ||
+      card?.language ||
+      card?.card_info?.language ||
+      card?.set?.language ||
+      null
+
+    const values = directLanguage
+      ? [...rawLanguages, directLanguage]
+      : rawLanguages
+
+    const aliases = {
+      en: 'English',
+      eng: 'English',
+      english: 'English',
+      ja: 'Japanese',
+      jp: 'Japanese',
+      jap: 'Japanese',
+      jpn: 'Japanese',
+      japanese: 'Japanese',
+      de: 'German',
+      ger: 'German',
+      deu: 'German',
+      german: 'German',
+      fr: 'French',
+      fre: 'French',
+      fra: 'French',
+      french: 'French',
+      es: 'Spanish',
+      spa: 'Spanish',
+      spanish: 'Spanish',
+      it: 'Italian',
+      ita: 'Italian',
+      italian: 'Italian',
+      pt: 'Portuguese',
+      por: 'Portuguese',
+      portuguese: 'Portuguese',
+      zh: 'Chinese',
+      chn: 'Chinese',
+      zho: 'Chinese',
+      chinese: 'Chinese',
+      ko: 'Korean',
+      kor: 'Korean',
+      korean: 'Korean',
+    }
+
+    const normalizedSetLanguage = directLanguage
+      ? aliases[String(directLanguage).trim().toLowerCase()] ||
+        String(directLanguage).trim().toUpperCase()
+      : ''
+
+    const normalized = values
+      .map((value) => {
+        const key = String(value || '').trim().toLowerCase()
+
+        if (
+          key === 'en' &&
+          normalizedSetLanguage &&
+          normalizedSetLanguage !== 'English'
+        ) {
+          return ''
+        }
+
+        return aliases[key] || (key ? key.toUpperCase() : '')
+      })
+      .filter(Boolean)
+
+    if (normalizedSetLanguage) {
+      normalized.unshift(normalizedSetLanguage)
+    }
+
+    return [...new Set(normalized)]
+  }
+
+  function toggleFilterValue(setter, value) {
+    setter((current) =>
+      current.includes(value)
+        ? current.filter((item) => item !== value)
+        : [...current, value]
+    )
+  }
+
+  function getFilterOptionCounts(values) {
+    const counts = {}
+
+    values.forEach((value) => {
+      if (!value || value === 'Unknown') return
+      counts[value] = (counts[value] || 0) + 1
+    })
+
+    return Object.entries(counts).sort((a, b) => {
+      if (b[1] !== a[1]) return b[1] - a[1]
+      return a[0].localeCompare(b[0])
+    })
+  }
+
   function getCardImage(card) {
     if (card?.image_url) return card.image_url
     if (card?.image) return card.image
@@ -137,6 +413,30 @@ function Search() {
       cardmarketPrices.find((price) => price.low)?.low
 
     return tcgMarket || cardmarketMarket || null
+  }
+
+  function getMarketPriceContext(card) {
+    const price = getMarketPrice(card)
+    if (price == null) return null
+
+    const currency = String(card?.currency || 'USD').toUpperCase()
+    const source = String(card?.price_source || '').toLowerCase()
+
+    return {
+      price: Number(price),
+      currency,
+      source,
+      formatted:
+        currency === 'EUR'
+          ? `€${Number(price).toFixed(2)}`
+          : `$${Number(price).toFixed(2)}`,
+      label:
+        source === 'cardmarket'
+          ? 'CardMarket'
+          : source === 'tcgplayer'
+          ? 'TCGPlayer market'
+          : 'market',
+    }
   }
 
   function getConditionMultiplier(condition) {
@@ -317,20 +617,182 @@ function Search() {
     })
   }
 
-  async function searchCards(page = 1, queryOverride = search) {
+  async function loadDiscovery() {
+    if (loadingDiscovery || discoveryLoaded) return
+
+    setLoadingDiscovery(true)
+
+    const { data, error } = await supabase.functions.invoke('pokewallet-search', {
+      body: {
+        mode: 'discover',
+      },
+    })
+
+    if (error) {
+      console.warn('Unable to load Search discovery:', error)
+      setLoadingDiscovery(false)
+      setDiscoveryLoaded(true)
+      return
+    }
+
+    const nextDiscovery = {
+      recent_sets: Array.isArray(data?.recent_sets) ? data.recent_sets : [],
+      top_movers: Array.isArray(data?.top_movers) ? data.top_movers : [],
+      trending_sets: Array.isArray(data?.trending_sets) ? data.trending_sets : [],
+    }
+
+    setDiscovery(nextDiscovery)
+    setLoadingDiscovery(false)
+    setDiscoveryLoaded(true)
+
+    cacheDiscoveryCardImages(nextDiscovery.top_movers)
+  }
+
+  async function cacheDiscoveryCardImages(items) {
+    const updates = await Promise.all(
+      items.map(async (card) => {
+        const cardId = getCardId(card)
+        if (!cardId) return card
+
+        const { data, error } = await supabase.functions.invoke(
+          'pokewallet-cache-image',
+          {
+            body: { id: cardId },
+          }
+        )
+
+        if (error || !data?.image_url) return card
+
+        return {
+          ...card,
+          image_url: data.image_url,
+        }
+      })
+    )
+
+    setDiscovery((current) => ({
+      ...current,
+      top_movers: updates,
+    }))
+  }
+
+  function runDiscoverySearch({ displayQuery, searchQuery }) {
+    const visibleQuery = String(displayQuery || searchQuery || '').trim()
+    const backendQuery = String(searchQuery || displayQuery || '').trim()
+
+    if (!backendQuery) return
+
+    setSearch(visibleQuery)
+    setActiveSearchQuery(backendQuery)
+    setCurrentPage(1)
+
+    searchCards(1, backendQuery, {
+      displayQuery: visibleQuery,
+      updateActiveQuery: false,
+    })
+  }
+
+  function openDiscoverySet(set) {
+    const displayQuery =
+      set?.display_name ||
+      set?.set_name ||
+      set?.name ||
+      set?.raw_set_name ||
+      set?.set_code ||
+      ''
+
+    const searchQuery =
+      set?.set_id ||
+      set?.set_code ||
+      set?.raw_set_name ||
+      set?.set_name ||
+      set?.display_name ||
+      set?.name ||
+      ''
+
+    runDiscoverySearch({
+      displayQuery,
+      searchQuery,
+    })
+  }
+
+  function formatSetReleaseDate(value) {
+    if (!value) return 'Release date unavailable'
+
+    const cleaned = String(value).replace(/(\d+)(st|nd|rd|th)/gi, '$1')
+    const date = new Date(cleaned)
+
+    if (Number.isNaN(date.getTime())) return String(value)
+
+    return date.toLocaleDateString(undefined, {
+      month: 'short',
+      day: 'numeric',
+      year: 'numeric',
+    })
+  }
+
+  async function loadGlobalFilterFacets(queryOverride = search) {
+    const cleanQuery = String(queryOverride || '').trim()
+
+    if (!cleanQuery || loadingFilterFacets || filterOption !== 'cards') return
+
+    setLoadingFilterFacets(true)
+
+    const { data, error } = await supabase.functions.invoke('pokewallet-search', {
+      body: {
+        query: cleanQuery,
+        page: 1,
+        limit: RESULTS_PER_PAGE,
+        facets_only: true,
+      },
+    })
+
+    if (error) {
+      console.warn('Unable to load global filter options:', error)
+      setLoadingFilterFacets(false)
+      return
+    }
+
+    setFilterFacets(data?.facets || null)
+    setLoadingFilterFacets(false)
+  }
+
+  async function searchCards(
+    page = 1,
+    queryOverride = activeSearchQuery || search,
+    options = {}
+  ) {
     if (loading) return
 
     const cleanQuery = String(queryOverride || '').trim()
+    const displayQuery = String(options?.displayQuery ?? search ?? cleanQuery).trim()
+    const shouldUpdateActiveQuery = options?.updateActiveQuery !== false
     const safePage = Number.isInteger(page) && page > 0 ? page : 1
+    const filtersToUse = options?.filtersOverride || {
+      cardTypes: cardTypeFilters,
+      rarities: rarityFilters,
+      sets: setFilters,
+      languages: languageFilters,
+    }
+
+    if (displayQuery && displayQuery !== search) {
+      setSearch(displayQuery)
+    }
+
+    if (shouldUpdateActiveQuery && cleanQuery) {
+      setActiveSearchQuery(cleanQuery)
+    }
 
     if (!cleanQuery) {
       setCards([])
+      setTotalResults(0)
       setMessage('Enter a card name before searching.')
       return
     }
 
     if (filterOption === 'sealed') {
       setCards([])
+      setTotalResults(0)
       setMessage('Sealed product search will be added later.')
       return
     }
@@ -343,6 +805,7 @@ function Search() {
         query: cleanQuery,
         page: safePage,
         limit: RESULTS_PER_PAGE,
+        filters: filtersToUse,
       },
     })
 
@@ -354,15 +817,24 @@ function Search() {
       console.error('Search response data:', data)
       setMessage('An error has occurred. Please try again.')
       setCards([])
+      setTotalResults(0)
       setLoading(false)
       return
     }
 
     const results = data?.results || data?.data || data?.cards || []
 
+    setFilterFacets(data?.facets || null)
     setCards(results)
     setCurrentPage(safePage)
     setTotalPages(data?.pagination?.total_pages || data?.total_pages || 1)
+    setTotalResults(
+      Number(
+        data?.pagination?.total_results ??
+          data?.pagination?.total ??
+          results.length
+      ) || 0
+    )
 
     if (safePage > 1) {
       window.scrollTo({
@@ -378,7 +850,7 @@ function Search() {
     setLoading(false)
 
     if (results.length > 0) {
-      cacheSearchResultImages(results)
+      cacheSearchResultImages(results, getSelectedLocalizedImageCode())
     }
   }
 
@@ -438,6 +910,20 @@ function Search() {
 
   const addingToInventory = isVendor && addDestination === 'inventory'
 
+  function getSelectedLocalizedImageCode() {
+    if (languageFilters.length !== 1) return ''
+
+    const languageToCode = {
+      Italian: 'it',
+      French: 'fr',
+      German: 'de',
+      Spanish: 'es',
+      Portuguese: 'pt',
+    }
+
+    return languageToCode[languageFilters[0]] || ''
+  }
+
   async function cacheSelectedCardImage(card) {
     const cardId =
       card?.pokewallet_id ||
@@ -464,13 +950,57 @@ function Search() {
     return data?.image_url || getCardImage(card)
   }
 
-  async function cacheSearchResultImages(results) {
+  async function cacheSearchResultImages(
+    results,
+    localizedLanguage = getSelectedLocalizedImageCode()
+  ) {
     results.forEach(async (card) => {
-      if (card?.image_url) return
-
       const cardId = getCardId(card)
-
       if (!cardId) return
+
+      if (localizedLanguage) {
+        const availableCodes = Array.isArray(card?.image_languages)
+          ? card.image_languages.map((value) =>
+              String(value || '').trim().toLowerCase()
+            )
+          : []
+
+        if (!availableCodes.includes(localizedLanguage)) return
+
+        const { data, error } = await supabase.functions.invoke(
+          'pokewallet-localized-image',
+          {
+            body: {
+              id: cardId,
+              lang: localizedLanguage,
+              size: 'high',
+            },
+          }
+        )
+
+        if (error) {
+          console.warn('Localized image cache failed:', error.message)
+          return
+        }
+
+        if (!data?.localized || !data?.image_url) return
+
+        setCards((currentCards) =>
+          currentCards.map((currentCard) =>
+            getCardId(currentCard) === cardId
+              ? {
+                  ...currentCard,
+                  image_url: data.image_url,
+                  displayed_image_language: data.served_language,
+                }
+              : currentCard
+          )
+        )
+
+        return
+      }
+
+      if (card?.image_url) return
 
       const { data, error } = await supabase.functions.invoke(
         'pokewallet-cache-image',
@@ -756,8 +1286,93 @@ function Search() {
     }
   }
 
+  function facetToOptions(key, fallbackValues) {
+    const serverFacet = filterFacets?.[key]
+
+    if (Array.isArray(serverFacet)) {
+      return serverFacet.map((item) => [item.value, Number(item.count || 0)])
+    }
+
+    return getFilterOptionCounts(fallbackValues)
+  }
+
+  const cardTypeOptions = useMemo(
+    () =>
+      facetToOptions(
+        'cardTypes',
+        cards.map((card) => getCardType(card))
+      ),
+    [cards, filterFacets]
+  )
+
+  const rarityOptions = useMemo(
+    () =>
+      facetToOptions(
+        'rarities',
+        cards.map((card) => normalizeRarity(getRarity(card)))
+      ),
+    [cards, filterFacets]
+  )
+
+  const setOptions = useMemo(
+    () =>
+      facetToOptions(
+        'sets',
+        cards.map((card) => getSetName(card))
+      ),
+    [cards, filterFacets]
+  )
+
+  const languageOptions = useMemo(
+    () => {
+      const serverFacet = filterFacets?.languages
+
+      if (Array.isArray(serverFacet)) {
+        return serverFacet.map((item) => [item.value, Number(item.count || 0)])
+      }
+
+      return getFilterOptionCounts(
+        cards.flatMap((card) => getCardLanguages(card))
+      )
+    },
+    [cards, filterFacets]
+  )
+
+  const filteredCards = useMemo(() => {
+    if (filterFacets) return cards
+
+    return cards.filter((card) => {
+      const cardTypeMatches =
+        cardTypeFilters.length === 0 || cardTypeFilters.includes(getCardType(card))
+      const rarityMatches =
+        rarityFilters.length === 0 ||
+        rarityFilters.includes(normalizeRarity(getRarity(card)))
+      const setMatches =
+        setFilters.length === 0 || setFilters.includes(getSetName(card))
+      const languageMatches =
+        languageFilters.length === 0 ||
+        languageFilters.some((language) =>
+          getCardLanguages(card).includes(language)
+        )
+
+      return (
+        cardTypeMatches &&
+        rarityMatches &&
+        setMatches &&
+        languageMatches
+      )
+    })
+  }, [
+    cards,
+    filterFacets,
+    cardTypeFilters,
+    rarityFilters,
+    setFilters,
+    languageFilters,
+  ])
+
   const sortedCards = useMemo(() => {
-    const sorted = [...cards]
+    const sorted = [...filteredCards]
 
     switch (sortOption) {
       case 'price-low':
@@ -777,7 +1392,112 @@ function Search() {
     }
 
     return sorted
-  }, [cards, sortOption])
+  }, [filteredCards, sortOption])
+
+  const advancedFilterCount =
+    cardTypeFilters.length +
+    rarityFilters.length +
+    setFilters.length +
+    languageFilters.length
+
+  const advancedFilterGroups = [
+    {
+      key: 'cardType',
+      label: 'Card Type',
+      values: cardTypeFilters,
+      setValues: setCardTypeFilters,
+      options: cardTypeOptions,
+    },
+    {
+      key: 'rarity',
+      label: 'Rarity',
+      values: rarityFilters,
+      setValues: setRarityFilters,
+      options: rarityOptions,
+    },
+    {
+      key: 'set',
+      label: 'Set',
+      values: setFilters,
+      setValues: setSetFilters,
+      options: setOptions,
+    },
+    {
+      key: 'language',
+      label: 'Language',
+      values: languageFilters,
+      setValues: setLanguageFilters,
+      options: languageOptions,
+    },
+  ]
+
+  function applyFilterChange(setter, value) {
+    setter((current) =>
+      current.includes(value)
+        ? current.filter((item) => item !== value)
+        : [...current, value]
+    )
+    setCurrentPage(1)
+  }
+
+  async function handleScanPhoto(scanResult) {
+    const imageDataUrl = scanResult?.imageDataUrl || ''
+    const ocrText = String(scanResult?.ocrText || '').trim()
+
+    setCapturedScanImage(imageDataUrl)
+    setShowCardScanner(false)
+    setMatchingScan(true)
+    setMessage('Reading card...')
+
+    const { data, error } = await supabase.functions.invoke(
+      'pokewallet-scan-match',
+      {
+        body: {
+          ocr_text: ocrText,
+        },
+      }
+    )
+
+    setMatchingScan(false)
+
+    if (error) {
+      console.error('Scan match failed:', error)
+      setMessage('Vendly could not identify this card. Please try another photo.')
+      return
+    }
+
+    const candidates = Array.isArray(data?.candidates)
+      ? data.candidates
+      : []
+
+    setScanDetected(data?.detected || null)
+    setScanCandidates(candidates)
+    setShowScanMatches(true)
+
+    if (candidates.length === 0) {
+      setMessage('No confident card match found. Try scanning again.')
+    } else {
+      setMessage('')
+    }
+
+    cacheSearchResultImages(candidates)
+  }
+
+  function selectScannedCandidate(card) {
+    const query = getCardName(card)
+
+    setShowScanMatches(false)
+    setScanCandidates([])
+    setScanDetected(null)
+    setCurrentPage(1)
+    setSearch(query)
+    setActiveSearchQuery(query)
+
+    searchCards(1, query, {
+      displayQuery: query,
+      updateActiveQuery: false,
+    })
+  }
 
   const paginationItems = useMemo(() => {
     if (totalPages <= 1) return [1]
@@ -822,25 +1542,48 @@ function Search() {
             <SearchIcon size={18} className="text-gray-500" />
 
             <input
-              placeholder="Search cards, example: Charizard"
+              placeholder="Search cards or sets, example: Charizard or Scarlet & Violet"
               value={search}
-              onChange={(e) => setSearch(e.target.value)}
+              onChange={(e) => {
+                setSearch(e.target.value)
+                setActiveSearchQuery('')
+              }}
               onKeyDown={(e) => {
                 if (e.key === 'Enter') {
                   e.preventDefault()
+                  const typedQuery = search.trim()
                   setCurrentPage(1)
-                  searchCards(1)
+                  setActiveSearchQuery(typedQuery)
+                  searchCards(1, typedQuery, {
+                    displayQuery: typedQuery,
+                    updateActiveQuery: false,
+                  })
                 }
               }}
               className="w-full bg-transparent p-4 text-white outline-none"
             />
 
+            <button
+              type="button"
+              onClick={() => setShowCardScanner(true)}
+              className="mr-2 flex h-9 w-9 shrink-0 items-center justify-center rounded-lg text-gray-500 transition hover:bg-[#1a1a1a] hover:text-yellow-300"
+              aria-label="Scan card"
+              title="Scan card"
+            >
+              <Camera size={19} />
+            </button>
+
             {search && (
               <button
                 onClick={() => {
                   setSearch('')
+                  setActiveSearchQuery('')
                   setCards([])
+                  setCurrentPage(1)
+                  setTotalPages(1)
+                  setTotalResults(0)
                   setMessage('')
+                  searchPageMemory = null
                 }}
                 className="text-gray-500 hover:text-white"
               >
@@ -853,8 +1596,13 @@ function Search() {
             <button
               type="button"
               onClick={() => {
+                const typedQuery = search.trim()
                 setCurrentPage(1)
-                searchCards(1)
+                setActiveSearchQuery(typedQuery)
+                searchCards(1, typedQuery, {
+                  displayQuery: typedQuery,
+                  updateActiveQuery: false,
+                })
               }}
               disabled={loading || !search.trim()}
               className="flex-1 rounded-xl bg-white p-4 font-semibold text-black disabled:opacity-60"
@@ -867,6 +1615,8 @@ function Search() {
                 onClick={() => {
                   setShowSortMenu(!showSortMenu)
                   setShowFilterMenu(false)
+                  setShowAdvancedFilterMenu(false)
+                  setOpenAdvancedDropdown('')
                 }}
                 className="rounded-xl border border-[#222] bg-[#111] p-4"
               >
@@ -876,10 +1626,10 @@ function Search() {
               {showSortMenu && (
                 <div className="absolute right-0 z-40 mt-2 w-56 rounded-xl border border-[#222] bg-[#111] p-2 shadow-xl">
                   {[
-                    ['price-low', 'Price: Low to High'],
-                    ['price-high', 'Price: High to Low'],
-                    ['name-asc', 'Product Name: A to Z'],
-                    ['name-desc', 'Product Name: Z to A'],
+                    ['price-low', 'Price: Low to High (This Page)'],
+                    ['price-high', 'Price: High to Low (This Page)'],
+                    ['name-asc', 'Product Name: A to Z (This Page)'],
+                    ['name-desc', 'Product Name: Z to A (This Page)'],
                   ].map(([value, label]) => (
                     <button
                       key={value}
@@ -903,6 +1653,8 @@ function Search() {
                 onClick={() => {
                   setShowFilterMenu(!showFilterMenu)
                   setShowSortMenu(false)
+                  setShowAdvancedFilterMenu(false)
+                  setOpenAdvancedDropdown('')
                 }}
                 className="rounded-xl border border-[#222] bg-[#111] p-4"
               >
@@ -943,7 +1695,221 @@ function Search() {
                 </div>
               )}
             </div>
+
+            <div className="relative">
+              <button
+                type="button"
+                onClick={() => {
+                  const nextOpen = !showAdvancedFilterMenu
+                  setShowAdvancedFilterMenu(nextOpen)
+                  setOpenAdvancedDropdown('')
+                  setShowSortMenu(false)
+                  setShowFilterMenu(false)
+
+                  if (nextOpen && search.trim() && !filterFacets) {
+                    loadGlobalFilterFacets(search)
+                  }
+                }}
+                className={`relative rounded-xl border p-4 transition ${
+                  advancedFilterCount > 0
+                    ? 'border-yellow-400 bg-yellow-400 text-black'
+                    : 'border-[#222] bg-[#111] text-white'
+                }`}
+                aria-label="Card filters"
+                title="Card filters"
+              >
+                <Funnel size={18} />
+                {advancedFilterCount > 0 && (
+                  <span className="absolute -right-2 -top-2 flex h-5 min-w-5 items-center justify-center rounded-full bg-white px-1 text-[10px] font-black text-black">
+                    {advancedFilterCount}
+                  </span>
+                )}
+              </button>
+
+              {showAdvancedFilterMenu && (
+                <div className="absolute right-0 z-40 mt-2 w-[330px] max-w-[calc(100vw-40px)] rounded-2xl border border-[#222] bg-[#111] p-3 shadow-2xl">
+                  <div className="mb-3 flex items-center justify-between gap-3">
+                    <p className="text-sm font-semibold text-white">Card Filters</p>
+
+                    <div className="flex items-center gap-3">
+                      {advancedFilterCount > 0 && (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setCardTypeFilters([])
+                            setRarityFilters([])
+                            setSetFilters([])
+                            setLanguageFilters([])
+                            setCurrentPage(1)
+                          }}
+                          className="text-xs font-semibold text-yellow-300"
+                        >
+                          Clear Filters
+                        </button>
+                      )}
+
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const backendQuery = String(
+                            activeSearchQuery || search || ''
+                          ).trim()
+
+                          if (!backendQuery) return
+
+                          setCurrentPage(1)
+                          setShowAdvancedFilterMenu(false)
+                          setOpenAdvancedDropdown('')
+
+                          searchCards(1, backendQuery, {
+                            displayQuery: search,
+                            updateActiveQuery: false,
+                          })
+                        }}
+                        disabled={loading || !(activeSearchQuery || search).trim()}
+                        className="rounded-lg bg-yellow-400 px-3 py-2 text-xs font-black text-black disabled:opacity-50"
+                      >
+                        Apply
+                      </button>
+                    </div>
+                  </div>
+
+                  {loadingFilterFacets && (
+                    <div className="mb-3 rounded-xl border border-[#222] bg-black px-3 py-2 text-xs text-gray-400">
+                      Loading all filter options...
+                    </div>
+                  )}
+
+                  <div className="space-y-2">
+                    {advancedFilterGroups.map((group) => {
+                      const isOpen = openAdvancedDropdown === group.key
+                      const selectedCount = group.values.length
+
+                      return (
+                        <div key={group.key} className="relative">
+                          <button
+                            type="button"
+                            onClick={() =>
+                              setOpenAdvancedDropdown(isOpen ? '' : group.key)
+                            }
+                            className={`flex w-full items-center justify-between rounded-xl border px-3 py-3 text-left text-sm font-semibold transition ${
+                              selectedCount > 0
+                                ? 'border-yellow-500 bg-yellow-950/20 text-yellow-300'
+                                : 'border-[#2b2b2b] bg-black text-white'
+                            }`}
+                          >
+                            <span>
+                              {group.label}
+                              {selectedCount > 0 && (
+                                <span className="ml-2 text-xs text-yellow-400">
+                                  ({selectedCount})
+                                </span>
+                              )}
+                            </span>
+
+                            <ChevronDown
+                              size={17}
+                              className={`transition-transform ${
+                                isOpen ? 'rotate-180' : ''
+                              }`}
+                            />
+                          </button>
+
+                          {isOpen && (
+                            <div className="mt-2 max-h-64 overflow-y-auto rounded-xl border border-[#2b2b2b] bg-black p-2">
+                              {group.options.length === 0 ? (
+                                <p className="px-2 py-3 text-sm text-gray-500">
+                                  No options on this results page.
+                                </p>
+                              ) : (
+                                group.options.map(([value, count]) => {
+                                  const checked = group.values.includes(value)
+
+                                  return (
+                                    <label
+                                      key={value}
+                                      className="flex cursor-pointer items-center justify-between gap-3 rounded-lg px-2 py-2.5 hover:bg-[#171717]"
+                                    >
+                                      <span className="flex min-w-0 items-center gap-3">
+                                        <input
+                                          type="checkbox"
+                                          checked={checked}
+                                          onChange={() =>
+                                            applyFilterChange(group.setValues, value)
+                                          }
+                                          className="h-4 w-4"
+                                        />
+                                        <span className="truncate text-sm text-white">
+                                          {value}
+                                        </span>
+                                      </span>
+
+                                      <span className="shrink-0 text-xs text-gray-500">
+                                        ({count})
+                                      </span>
+                                    </label>
+                                  )
+                                })
+                              )}
+                            </div>
+                          )}
+                        </div>
+                      )
+                    })}
+                  </div>
+
+                  <p className="mt-3 text-[11px] leading-4 text-gray-600">
+                    Options and counts are shared across every results page.
+                  </p>
+                </div>
+              )}
+            </div>
           </div>
+
+          {advancedFilterCount > 0 && (
+            <div className="mt-3 flex flex-wrap gap-2">
+              {advancedFilterGroups.flatMap((group) =>
+                group.values.map((value) => (
+                  <button
+                    key={`${group.key}-${value}`}
+                    type="button"
+                    onClick={() => {
+                      const nextValues = group.values.filter((item) => item !== value)
+
+                      group.setValues(nextValues)
+                      setCurrentPage(1)
+
+                      const backendQuery = String(
+                        activeSearchQuery || search || ''
+                      ).trim()
+
+                      if (!backendQuery) return
+
+                      const nextFilters = {
+                        cardTypes:
+                          group.key === 'cardType' ? nextValues : cardTypeFilters,
+                        rarities:
+                          group.key === 'rarity' ? nextValues : rarityFilters,
+                        sets:
+                          group.key === 'set' ? nextValues : setFilters,
+                        languages:
+                          group.key === 'language' ? nextValues : languageFilters,
+                      }
+
+                      searchCards(1, backendQuery, {
+                        displayQuery: search,
+                        updateActiveQuery: false,
+                        filtersOverride: nextFilters,
+                      })
+                    }}
+                    className="flex items-center gap-1 rounded-full border border-yellow-900 bg-yellow-950/30 px-3 py-1.5 text-xs font-semibold text-yellow-300"
+                  >
+                    {group.label}: {value} <X size={13} />
+                  </button>
+                ))
+              )}
+            </div>
+          )}
         </div>
 
         {message && (
@@ -968,29 +1934,251 @@ function Search() {
   </p>
 )}
 
-        {loading && <p className="mb-4 text-sm text-gray-400">Searching...</p>}
+        {matchingScan && (
+          <div className="fixed inset-0 z-[115] flex items-center justify-center bg-black/70 backdrop-blur-[2px]">
+            <div className="flex min-w-[210px] flex-col items-center rounded-2xl border border-white/10 bg-[#111]/95 px-7 py-6 shadow-2xl">
+              <div className="h-11 w-11 animate-spin rounded-full border-4 border-white/15 border-t-yellow-300" />
+              <p className="mt-4 text-sm font-semibold text-white">
+                Matching card...
+              </p>
+              <p className="mt-1 text-xs text-gray-500">
+                Checking PokéWallet
+              </p>
+            </div>
+          </div>
+        )}
+
+        {loading && (
+          <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/55 backdrop-blur-[2px]">
+            <div className="flex min-w-[190px] flex-col items-center rounded-2xl border border-white/10 bg-[#111]/95 px-7 py-6 shadow-2xl">
+              <div className="relative h-12 w-12">
+                <div className="absolute inset-0 rounded-full border-4 border-white/15" />
+                <div className="absolute inset-0 animate-spin rounded-full border-4 border-transparent border-t-yellow-300" />
+                <div className="absolute inset-[15px] rounded-full bg-yellow-300" />
+              </div>
+
+              <p className="mt-4 text-sm font-semibold text-white">
+                Loading cards...
+              </p>
+              <p className="mt-1 text-xs text-gray-500">
+                Finding the next results
+              </p>
+            </div>
+          </div>
+        )}
 
         {!loading && cards.length === 0 && filterOption === 'cards' && (
-          <section className="mb-8">
-            <h2 className="mb-3 text-xl font-semibold">Trending Searches</h2>
+          <section className="mb-8 space-y-7">
+            {loadingDiscovery && (
+              <div className="rounded-2xl border border-[#222] bg-[#111] p-5">
+                <div className="flex items-center gap-3">
+                  <Sparkles size={18} className="text-yellow-300" />
+                  <div>
+                    <p className="font-semibold text-white">Loading discovery</p>
+                    <p className="mt-1 text-sm text-gray-500">
+                      Finding new sets and cards moving this week.
+                    </p>
+                  </div>
+                </div>
+              </div>
+            )}
 
-            <div className="flex flex-wrap gap-2">
-              {['Charizard', 'Umbreon', 'Pikachu', 'Gengar', 'Mew'].map((item) => (
-                <button
-                  key={item}
-                  type="button"
-                  onClick={() => {
-                    setSearch(item)
-                    setCurrentPage(1)
-                    searchCards(1, item)
-                  }}
-                  disabled={loading}
-                  className="rounded-full border border-[#222] bg-[#111] px-4 py-2 text-sm disabled:opacity-50"
-                >
-                  {item}
-                </button>
-              ))}
-            </div>
+            {!loadingDiscovery && discovery.recent_sets.length > 0 && (
+              <div>
+                <div className="mb-3 flex items-end justify-between gap-3">
+                  <div>
+                    <div className="flex items-center gap-2">
+                      <Sparkles size={18} className="text-yellow-300" />
+                      <h2 className="text-xl font-semibold">New Releases</h2>
+                    </div>
+                    <p className="mt-1 text-xs text-gray-500">
+                      Recently released English Pokémon sets
+                    </p>
+                  </div>
+                </div>
+
+                <div className="-mx-5 flex gap-3 overflow-x-auto px-5 pb-2 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+                  {discovery.recent_sets.map((set) => {
+                    const setName =
+                      set?.display_name || set?.name || 'Unknown Set'
+
+                    return (
+                      <button
+                        key={set?.set_id || set?.set_code || setName}
+                        type="button"
+                        onClick={() => openDiscoverySet(set)}
+                        className="w-[168px] shrink-0 overflow-hidden rounded-2xl border border-[#242424] bg-[#111] text-left transition hover:border-[#444]"
+                      >
+                        <div className="flex h-28 items-center justify-center border-b border-[#242424] bg-gradient-to-br from-[#181818] to-black p-5">
+                          <div className="text-center">
+                            <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-gray-600">
+                              Pokémon TCG
+                            </p>
+                            <p className="mt-2 line-clamp-3 text-sm font-black leading-5 text-white">
+                              {setName}
+                            </p>
+                          </div>
+                        </div>
+
+                        <div className="p-3">
+                          <p className="line-clamp-2 min-h-10 text-sm font-semibold text-white">
+                            {setName}
+                          </p>
+                          <p className="mt-1 text-xs text-gray-500">
+                            {Number(set?.card_count || 0).toLocaleString()} cards
+                          </p>
+                          <p className="mt-1 text-[11px] text-gray-600">
+                            {formatSetReleaseDate(set?.release_date)}
+                          </p>
+                        </div>
+                      </button>
+                    )
+                  })}
+                </div>
+              </div>
+            )}
+
+            {!loadingDiscovery && discovery.top_movers.length > 0 && (
+              <div>
+                <div className="mb-3">
+                  <div className="flex items-center gap-2">
+                    <TrendingUp size={18} className="text-green-300" />
+                    <h2 className="text-xl font-semibold">Top Movers</h2>
+                  </div>
+                  <p className="mt-1 text-xs text-gray-500">
+                    Cards with the strongest 7-day TCGPlayer price growth
+                  </p>
+                </div>
+
+                <div className="-mx-5 flex gap-3 overflow-x-auto px-5 pb-2 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+                  {discovery.top_movers.map((card) => {
+                    const imageUrl = getCardImage(card)
+                    const price = getMarketPrice(card)
+
+                    return (
+                      <button
+                        key={getCardId(card)}
+                        type="button"
+                        onClick={() => {
+                          const query = getCardName(card)
+
+                          runDiscoverySearch({
+                            displayQuery: query,
+                            searchQuery: query,
+                          })
+                        }}
+                        className="w-[142px] shrink-0 text-left"
+                      >
+                        <div className="flex h-[178px] items-center justify-center overflow-hidden rounded-2xl border border-[#242424] bg-[#111]">
+                          {imageUrl ? (
+                            <img
+                              src={imageUrl}
+                              alt={getCardName(card)}
+                              className="h-full w-full object-contain p-2"
+                            />
+                          ) : (
+                            <div className="flex h-full w-full items-center justify-center bg-gradient-to-br from-[#181818] to-black p-4 text-center">
+                              <p className="text-sm font-bold text-gray-400">
+                                {getCardName(card)}
+                              </p>
+                            </div>
+                          )}
+                        </div>
+
+                        <p className="mt-2 line-clamp-1 text-sm font-semibold text-white">
+                          {getCardName(card)}
+                        </p>
+                        <p className="mt-1 line-clamp-1 text-xs text-gray-500">
+                          {getSetName(card)}
+                        </p>
+
+                        <div className="mt-1 flex items-center justify-between gap-2">
+                          <span className="text-xs font-bold text-yellow-300">
+                            {price ? `$${Number(price).toFixed(2)}` : '—'}
+                          </span>
+                          {card?.change_7d && (
+                            <span className="text-[11px] font-bold text-green-300">
+                              {card.change_7d}
+                            </span>
+                          )}
+                        </div>
+                      </button>
+                    )
+                  })}
+                </div>
+              </div>
+            )}
+
+            {!loadingDiscovery && discovery.trending_sets.length > 0 && (
+              <div>
+                <div className="mb-3">
+                  <div className="flex items-center gap-2">
+                    <Flame size={18} className="text-orange-300" />
+                    <h2 className="text-xl font-semibold">Trending Sets</h2>
+                  </div>
+                  <p className="mt-1 text-xs text-gray-500">
+                    Sets with the strongest CardMarket movement this week
+                  </p>
+                </div>
+
+                <div className="overflow-hidden rounded-2xl border border-[#222] bg-[#111]">
+                  {discovery.trending_sets.map((set, index) => (
+                    <button
+                      key={`${set?.set_code || set?.set_name}-${index}`}
+                      type="button"
+                      onClick={() => openDiscoverySet(set)}
+                      className={`flex w-full items-center gap-3 p-4 text-left transition hover:bg-[#171717] ${
+                        index > 0 ? 'border-t border-[#222]' : ''
+                      }`}
+                    >
+                      <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-black text-sm font-black text-gray-400">
+                        {index + 1}
+                      </div>
+
+                      <div className="min-w-0 flex-1">
+                        <p className="truncate text-sm font-semibold text-white">
+                          {set?.set_name || 'Unknown Set'}
+                        </p>
+                        <p className="mt-1 text-xs text-gray-500">
+                          {Number(set?.card_count || 0).toLocaleString()} cards
+                          {set?.avg_price_current != null
+                            ? ` • $${Number(set.avg_price_current).toFixed(2)} avg`
+                            : ''}
+                        </p>
+                      </div>
+
+                      <div className="flex shrink-0 items-center gap-2">
+                        {set?.price_change && (
+                          <span
+                            className={`text-xs font-bold ${
+                              String(set.price_change).trim().startsWith('-')
+                                ? 'text-red-300'
+                                : 'text-green-300'
+                            }`}
+                          >
+                            {set.price_change}
+                          </span>
+                        )}
+                        <ArrowRight size={16} className="text-gray-600" />
+                      </div>
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {!loadingDiscovery &&
+              discoveryLoaded &&
+              discovery.recent_sets.length === 0 &&
+              discovery.top_movers.length === 0 &&
+              discovery.trending_sets.length === 0 && (
+                <div className="rounded-2xl border border-[#222] bg-[#111] p-5 text-center">
+                  <p className="font-semibold text-white">Start exploring</p>
+                  <p className="mt-1 text-sm text-gray-500">
+                    Search for a card or set above.
+                  </p>
+                </div>
+              )}
           </section>
         )}
 
@@ -998,13 +2186,25 @@ function Search() {
           <section>
             <div className="mb-3 flex items-center justify-between">
               <h2 className="text-xl font-semibold">Results</h2>
-              <p className="text-sm text-gray-500">{sortedCards.length} found</p>
+              <p className="text-sm text-gray-500">
+                {`${totalResults || sortedCards.length} found`}
+              </p>
             </div>
+
+            {sortedCards.length === 0 && advancedFilterCount > 0 && (
+              <div className="mb-3 rounded-2xl border border-[#222] bg-[#111] p-5 text-center">
+                <p className="font-semibold text-white">No cards match these filters on this page.</p>
+                <p className="mt-1 text-sm text-gray-500">
+                  Try changing or clearing one of your card filters.
+                </p>
+              </div>
+            )}
 
             <div className="space-y-3">
               {sortedCards.map((card) => {
                 const imageUrl = getCardImage(card)
                 const marketPrice = getMarketPrice(card)
+                const marketContext = getMarketPriceContext(card)
                 const cardId = getCardId(card)
 
                 return (
@@ -1034,8 +2234,8 @@ function Search() {
                       </p>
 
                       <p className="mt-2 font-semibold text-yellow-300">
-                        {marketPrice
-                          ? `$${Number(marketPrice).toFixed(2)} market`
+                        {marketContext
+                          ? `${marketContext.formatted} ${marketContext.label}`
                           : 'No market data'}
                       </p>
 
@@ -1062,7 +2262,11 @@ function Search() {
               <div className="flex items-center justify-center gap-2">
                 <button
                   type="button"
-                  onClick={() => searchCards(currentPage - 1)}
+                  onClick={() =>
+                    searchCards(currentPage - 1, activeSearchQuery || search, {
+                      displayQuery: search,
+                    })
+                  }
                   disabled={loading || currentPage <= 1}
                   className="flex h-10 w-10 items-center justify-center rounded-lg border border-[#222] text-sm font-semibold disabled:opacity-30"
                   aria-label="Previous page"
@@ -1075,7 +2279,11 @@ function Search() {
                     <button
                       key={item}
                       type="button"
-                      onClick={() => searchCards(item)}
+                      onClick={() =>
+                        searchCards(item, activeSearchQuery || search, {
+                          displayQuery: search,
+                        })
+                      }
                       disabled={loading || item === currentPage}
                       className={`flex h-10 min-w-10 items-center justify-center rounded-lg border px-3 text-sm font-bold ${
                         item === currentPage
@@ -1097,7 +2305,11 @@ function Search() {
 
                 <button
                   type="button"
-                  onClick={() => searchCards(currentPage + 1)}
+                  onClick={() =>
+                    searchCards(currentPage + 1, activeSearchQuery || search, {
+                      displayQuery: search,
+                    })
+                  }
                   disabled={loading || currentPage >= totalPages}
                   className="flex h-10 w-10 items-center justify-center rounded-lg border border-[#222] text-sm font-semibold disabled:opacity-30"
                   aria-label="Next page"
@@ -1210,6 +2422,7 @@ function Search() {
           getRarity={getRarity}
           imageUrl={getCardImage(selectedCard)}
           marketPrice={getMarketPrice(selectedCard)}
+          marketPriceContext={getMarketPriceContext(selectedCard)}
           suggestedPrice={getSuggestedPrice(selectedCard, 'raw', condition)}
           purchasePrice={purchasePrice}
           setPurchasePrice={setPurchasePrice}
@@ -1272,6 +2485,7 @@ function Search() {
           getRarity={getRarity}
           imageUrl={getCardImage(selectedCard)}
           marketPrice={getMarketPrice(selectedCard)}
+          marketPriceContext={getMarketPriceContext(selectedCard)}
           suggestedPrice={getSuggestedPrice(selectedCard, 'graded', condition)}
           purchasePrice={purchasePrice}
           setPurchasePrice={setPurchasePrice}
@@ -1348,6 +2562,124 @@ function Search() {
         </AddModal>
       )}
 
+      {showScanMatches && (
+        <div className="fixed inset-0 z-[116] overflow-y-auto bg-black/85 p-5">
+          <div className="mx-auto mt-8 w-full max-w-md rounded-2xl border border-[#222] bg-[#111] p-5">
+            <div className="mb-4 flex items-start justify-between gap-4">
+              <div>
+                <h2 className="text-xl font-semibold">Possible Matches</h2>
+                <p className="mt-1 text-xs text-gray-500">
+                  {scanDetected?.name
+                    ? `Detected: ${scanDetected.name}${
+                        scanDetected?.card_number
+                          ? ` • ${scanDetected.card_number}`
+                          : ''
+                      }`
+                    : 'Choose the card that matches your scan.'}
+                </p>
+              </div>
+
+              <button
+                type="button"
+                onClick={() => setShowScanMatches(false)}
+                className="text-gray-500 hover:text-white"
+              >
+                <X size={21} />
+              </button>
+            </div>
+
+            {scanCandidates.length === 0 ? (
+              <div className="rounded-xl border border-[#222] bg-black p-5 text-center">
+                <p className="font-semibold text-white">No confident match</p>
+                <p className="mt-1 text-sm text-gray-500">
+                  Try taking another photo with the name and card number clearly visible.
+                </p>
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowScanMatches(false)
+                    setShowCardScanner(true)
+                  }}
+                  className="mt-4 rounded-xl bg-white px-4 py-3 text-sm font-bold text-black"
+                >
+                  Scan Again
+                </button>
+              </div>
+            ) : (
+              <div className="space-y-3">
+                {scanCandidates.map((card) => {
+                  const imageUrl = getCardImage(card)
+                  const marketContext = getMarketPriceContext(card)
+
+                  return (
+                    <button
+                      key={getCardId(card)}
+                      type="button"
+                      onClick={() => selectScannedCandidate(card)}
+                      className="flex w-full gap-4 rounded-2xl border border-[#222] bg-black p-3 text-left transition hover:border-[#444]"
+                    >
+                      {imageUrl ? (
+                        <img
+                          src={imageUrl}
+                          alt={getCardName(card)}
+                          className="w-20 rounded-lg"
+                        />
+                      ) : (
+                        <div className="h-28 w-20 shrink-0 rounded-lg bg-[#191919]" />
+                      )}
+
+                      <div className="min-w-0 flex-1">
+                        <div className="flex items-start justify-between gap-2">
+                          <p className="font-semibold text-white">
+                            {getCardName(card)}
+                          </p>
+
+                          <span className="shrink-0 rounded-full bg-yellow-400 px-2 py-1 text-[10px] font-black text-black">
+                            {Number(card?.match_score || 0)}%
+                          </span>
+                        </div>
+
+                        <p className="mt-1 text-sm text-gray-400">
+                          {getSetName(card)} #{getCardNumber(card)}
+                        </p>
+
+                        <p className="mt-1 text-xs text-gray-500">
+                          {getRarity(card)}
+                        </p>
+
+                        <p className="mt-2 text-sm font-semibold text-yellow-300">
+                          {marketContext
+                            ? `${marketContext.formatted} ${marketContext.label}`
+                            : 'No market data'}
+                        </p>
+                      </div>
+                    </button>
+                  )
+                })}
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowScanMatches(false)
+                    setShowCardScanner(true)
+                  }}
+                  className="w-full rounded-xl border border-[#2a2a2a] bg-[#171717] p-3 text-sm font-semibold text-gray-300"
+                >
+                  None of these — Scan Again
+                </button>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      <CardScanner
+        open={showCardScanner}
+        onClose={() => setShowCardScanner(false)}
+        onConfirm={handleScanPhoto}
+      />
+
       <Navbar />
     </div>
   )
@@ -1362,6 +2694,7 @@ function AddModal({
   getRarity,
   imageUrl,
   marketPrice,
+  marketPriceContext,
   suggestedPrice,
   purchasePrice,
   setPurchasePrice,
@@ -1422,8 +2755,8 @@ function AddModal({
             </p>
 
             <p className="mt-2 text-sm font-semibold text-yellow-300">
-              {marketPrice
-                ? `$${Number(marketPrice).toFixed(2)} market`
+              {marketPriceContext
+                ? `${marketPriceContext.formatted} ${marketPriceContext.label}`
                 : 'No market data'}
             </p>
           </div>

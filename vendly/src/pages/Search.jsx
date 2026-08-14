@@ -39,7 +39,6 @@ function Search() {
   const [scanDetected, setScanDetected] = useState(null)
   const [showScanMatches, setShowScanMatches] = useState(false)
   const [matchingScan, setMatchingScan] = useState(false)
-  const [scanDebug, setScanDebug] = useState(null)
   const [saving, setSaving] = useState(false)
   const [message, setMessage] = useState('')
 
@@ -1443,9 +1442,11 @@ function Search() {
 
   async function handleScanPhoto(scanResult) {
     const imageDataUrl = scanResult?.imageDataUrl || ''
-    const ocrText = String(scanResult?.ocrText || '').trim()
-    const nameOcrText = String(scanResult?.nameOcrText || '').trim()
-    const numberOcrText = String(scanResult?.numberOcrText || '').trim()
+
+    if (!imageDataUrl) {
+      setMessage('No card image was captured. Please try again.')
+      return
+    }
 
     setCapturedScanImage(imageDataUrl)
     setShowCardScanner(false)
@@ -1456,9 +1457,7 @@ function Search() {
       'pokewallet-scan-match',
       {
         body: {
-          ocr_text: ocrText,
-          name_ocr_text: nameOcrText,
-          number_ocr_text: numberOcrText,
+          image_data_url: imageDataUrl,
         },
       }
     )
@@ -1466,7 +1465,7 @@ function Search() {
     setMatchingScan(false)
 
     if (error) {
-      console.error('Scan match failed:', error)
+      console.error('Google Vision scan match failed:', error)
       setMessage('Vendly could not identify this card. Please try another photo.')
       return
     }
@@ -1477,7 +1476,6 @@ function Search() {
 
     setScanDetected(data?.detected || null)
     setScanCandidates(candidates)
-    setScanDebug(data?.debug || null)
     setShowScanMatches(true)
 
     if (candidates.length === 0) {
@@ -1945,10 +1943,10 @@ function Search() {
             <div className="flex min-w-[210px] flex-col items-center rounded-2xl border border-white/10 bg-[#111]/95 px-7 py-6 shadow-2xl">
               <div className="h-11 w-11 animate-spin rounded-full border-4 border-white/15 border-t-yellow-300" />
               <p className="mt-4 text-sm font-semibold text-white">
-                Matching card...
+                Reading card...
               </p>
               <p className="mt-1 text-xs text-gray-500">
-                Checking PokéWallet
+                Google Vision + PokéWallet
               </p>
             </div>
           </div>
@@ -2600,52 +2598,6 @@ function Search() {
                 <p className="mt-1 text-sm text-gray-500">
                   Try taking another photo with the name and card number clearly visible.
                 </p>
-
-                {scanDebug && (
-                  <div className="mt-4 rounded-xl border border-[#2b2b2b] bg-[#0b0b0b] p-3 text-left">
-                    <p className="text-xs font-bold uppercase tracking-wide text-yellow-300">
-                      Scanner Debug
-                    </p>
-
-                    <p className="mt-2 text-xs text-gray-400">
-                      <span className="font-semibold text-gray-300">Detected name:</span>{' '}
-                      {scanDetected?.name || 'None'}
-                    </p>
-
-                    <p className="mt-1 text-xs text-gray-400">
-                      <span className="font-semibold text-gray-300">Detected number:</span>{' '}
-                      {scanDetected?.card_number || 'None'}
-                    </p>
-
-                    <p className="mt-1 text-xs text-gray-400">
-                      <span className="font-semibold text-gray-300">PokéWallet cards found:</span>{' '}
-                      {scanDebug?.pokewallet_cards_found ?? 0}
-                    </p>
-
-                    <details className="mt-3 text-xs text-gray-500">
-                      <summary className="cursor-pointer text-gray-400">
-                        View OCR text
-                      </summary>
-
-                      <div className="mt-2 space-y-2 break-words rounded-lg bg-black p-2">
-                        <p>
-                          <span className="text-gray-300">Top:</span>{' '}
-                          {scanDebug?.name_ocr_text || '—'}
-                        </p>
-                        <p>
-                          <span className="text-gray-300">Bottom:</span>{' '}
-                          {scanDebug?.number_ocr_text || '—'}
-                        </p>
-                        <p>
-                          <span className="text-gray-300">Queries:</span>{' '}
-                          {Array.isArray(scanDebug?.queries)
-                            ? scanDebug.queries.join(' | ')
-                            : '—'}
-                        </p>
-                      </div>
-                    </details>
-                  </div>
-                )}
 
                 <button
                   type="button"

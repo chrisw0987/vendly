@@ -1451,7 +1451,7 @@ function Search() {
     setCapturedScanImage(imageDataUrl)
     setShowCardScanner(false)
     setMatchingScan(true)
-    setMessage('Reading card...')
+    setMessage('Identifying card...')
 
     const { data, error } = await supabase.functions.invoke(
       'pokewallet-scan-match',
@@ -1465,7 +1465,7 @@ function Search() {
     setMatchingScan(false)
 
     if (error) {
-      console.error('Google Vision scan match failed:', error)
+      console.error('Vision scan match failed:', error)
       setMessage('Vendly could not identify this card. Please try another photo.')
       return
     }
@@ -1943,10 +1943,10 @@ function Search() {
             <div className="flex min-w-[210px] flex-col items-center rounded-2xl border border-white/10 bg-[#111]/95 px-7 py-6 shadow-2xl">
               <div className="h-11 w-11 animate-spin rounded-full border-4 border-white/15 border-t-yellow-300" />
               <p className="mt-4 text-sm font-semibold text-white">
-                Reading card...
+                Identifying card...
               </p>
               <p className="mt-1 text-xs text-gray-500">
-                Google Vision + PokéWallet
+                Reading card + checking PokéWallet
               </p>
             </div>
           </div>

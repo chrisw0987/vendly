@@ -39,6 +39,7 @@ function Search() {
   const [scanDetected, setScanDetected] = useState(null)
   const [showScanMatches, setShowScanMatches] = useState(false)
   const [matchingScan, setMatchingScan] = useState(false)
+  const [scanDebug, setScanDebug] = useState(null)
   const [saving, setSaving] = useState(false)
   const [message, setMessage] = useState('')
 
@@ -1476,6 +1477,7 @@ function Search() {
 
     setScanDetected(data?.detected || null)
     setScanCandidates(candidates)
+    setScanDebug(data?.debug || null)
     setShowScanMatches(true)
 
     if (candidates.length === 0) {
@@ -2598,6 +2600,52 @@ function Search() {
                 <p className="mt-1 text-sm text-gray-500">
                   Try taking another photo with the name and card number clearly visible.
                 </p>
+
+                {scanDebug && (
+                  <div className="mt-4 rounded-xl border border-[#2b2b2b] bg-[#0b0b0b] p-3 text-left">
+                    <p className="text-xs font-bold uppercase tracking-wide text-yellow-300">
+                      Scanner Debug
+                    </p>
+
+                    <p className="mt-2 text-xs text-gray-400">
+                      <span className="font-semibold text-gray-300">Detected name:</span>{' '}
+                      {scanDetected?.name || 'None'}
+                    </p>
+
+                    <p className="mt-1 text-xs text-gray-400">
+                      <span className="font-semibold text-gray-300">Detected number:</span>{' '}
+                      {scanDetected?.card_number || 'None'}
+                    </p>
+
+                    <p className="mt-1 text-xs text-gray-400">
+                      <span className="font-semibold text-gray-300">PokéWallet cards found:</span>{' '}
+                      {scanDebug?.pokewallet_cards_found ?? 0}
+                    </p>
+
+                    <details className="mt-3 text-xs text-gray-500">
+                      <summary className="cursor-pointer text-gray-400">
+                        View OCR text
+                      </summary>
+
+                      <div className="mt-2 space-y-2 break-words rounded-lg bg-black p-2">
+                        <p>
+                          <span className="text-gray-300">Top:</span>{' '}
+                          {scanDebug?.name_ocr_text || '—'}
+                        </p>
+                        <p>
+                          <span className="text-gray-300">Bottom:</span>{' '}
+                          {scanDebug?.number_ocr_text || '—'}
+                        </p>
+                        <p>
+                          <span className="text-gray-300">Queries:</span>{' '}
+                          {Array.isArray(scanDebug?.queries)
+                            ? scanDebug.queries.join(' | ')
+                            : '—'}
+                        </p>
+                      </div>
+                    </details>
+                  </div>
+                )}
 
                 <button
                   type="button"

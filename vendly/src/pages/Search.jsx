@@ -1443,6 +1443,8 @@ function Search() {
   async function handleScanPhoto(scanResult) {
     const imageDataUrl = scanResult?.imageDataUrl || ''
     const ocrText = String(scanResult?.ocrText || '').trim()
+    const nameOcrText = String(scanResult?.nameOcrText || '').trim()
+    const numberOcrText = String(scanResult?.numberOcrText || '').trim()
 
     setCapturedScanImage(imageDataUrl)
     setShowCardScanner(false)
@@ -1454,6 +1456,8 @@ function Search() {
       {
         body: {
           ocr_text: ocrText,
+          name_ocr_text: nameOcrText,
+          number_ocr_text: numberOcrText,
         },
       }
     )

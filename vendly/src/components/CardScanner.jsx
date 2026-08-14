@@ -2,6 +2,36 @@ import { useEffect, useRef, useState } from 'react'
 import { Camera, RotateCcw, X } from 'lucide-react'
 import { createWorker } from 'tesseract.js'
 
+
+function loadImage(src) {
+  return new Promise((resolve, reject) => {
+    const image = new Image()
+    image.onload = () => resolve(image)
+    image.onerror = reject
+    image.src = src
+  })
+}
+
+async function cropImageRegion(src, region) {
+  const image = await loadImage(src)
+  const canvas = document.createElement('canvas')
+
+  const sx = Math.max(0, Math.round(image.width * region.x))
+  const sy = Math.max(0, Math.round(image.height * region.y))
+  const sw = Math.max(1, Math.round(image.width * region.width))
+  const sh = Math.max(1, Math.round(image.height * region.height))
+
+  canvas.width = sw
+  canvas.height = sh
+
+  const context = canvas.getContext('2d')
+  if (!context) throw new Error('Unable to create crop canvas.')
+
+  context.drawImage(image, sx, sy, sw, sh, 0, 0, sw, sh)
+
+  return canvas.toDataURL('image/jpeg', 0.95)
+}
+
 function CardScanner({ open, onClose, onConfirm }) {
   const videoRef = useRef(null)
   const streamRef = useRef(null)
@@ -118,10 +148,34 @@ function CardScanner({ open, onClose, onConfirm }) {
         },
       })
 
-      const result = await worker.recognize(capturedImage)
-      const ocrText = String(result?.data?.text || '').trim()
+      // Pokémon cards are fairly predictable:
+      // - name is near the top
+      // - collector number is near the bottom
+      // We OCR those regions separately instead of treating every line equally.
+      const [nameCrop, numberCrop] = await Promise.all([
+        cropImageRegion(capturedImage, {
+          x: 0.08,
+          y: 0.02,
+          width: 0.84,
+          height: 0.20,
+        }),
+        cropImageRegion(capturedImage, {
+          x: 0.03,
+          y: 0.78,
+          width: 0.94,
+          height: 0.20,
+        }),
+      ])
 
-      if (!ocrText) {
+      const nameResult = await worker.recognize(nameCrop)
+      const numberResult = await worker.recognize(numberCrop)
+      const fullResult = await worker.recognize(capturedImage)
+
+      const nameText = String(nameResult?.data?.text || '').trim()
+      const numberText = String(numberResult?.data?.text || '').trim()
+      const fullText = String(fullResult?.data?.text || '').trim()
+
+      if (!nameText && !numberText && !fullText) {
         setCameraError(
           'Vendly could not read enough text from this photo. Try moving closer and reducing glare.'
         )
@@ -130,7 +184,9 @@ function CardScanner({ open, onClose, onConfirm }) {
 
       onConfirm?.({
         imageDataUrl: capturedImage,
-        ocrText,
+        ocrText: fullText,
+        nameOcrText: nameText,
+        numberOcrText: numberText,
       })
     } catch (error) {
       console.error('Card OCR failed:', error)

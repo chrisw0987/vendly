@@ -78,6 +78,8 @@ function Search() {
   const [condition, setCondition] = useState('NM')
   const [gradeCompany, setGradeCompany] = useState('PSA')
   const [grade, setGrade] = useState('10')
+  const [certNumber, setCertNumber] = useState('')
+  const [scanProcessingLabel, setScanProcessingLabel] = useState('Identifying card...')
 
   const [quantity, setQuantity] = useState(1)
   const [physicalLocation, setPhysicalLocation] = useState('')
@@ -951,6 +953,7 @@ function Search() {
     setCondition(destination === 'wishlist' ? 'ANY' : 'NM')
     setGradeCompany('PSA')
     setGrade('10')
+    setCertNumber('')
     setQuantity(1)
     setPhysicalLocation('')
     setShowPublic(false)
@@ -1282,6 +1285,10 @@ function Search() {
         item_type: itemType,
         grade_company: itemType === 'graded' ? gradeCompany : null,
         grade: itemType === 'graded' ? grade : null,
+        cert_number:
+          itemType === 'graded' && gradeCompany === 'PSA' && certNumber
+            ? certNumber
+            : null,
 
         physical_location: isVendor ? physicalLocation || null : null,
         is_public: isVendor ? showPublic : false,
@@ -1303,6 +1310,11 @@ function Search() {
 
       if (itemType === 'raw') {
         duplicateQuery = duplicateQuery.eq('condition', newItem.condition)
+      } else if (newItem.cert_number) {
+        duplicateQuery = duplicateQuery.eq(
+          'cert_number',
+          newItem.cert_number
+        )
       } else {
         duplicateQuery = duplicateQuery
           .eq('grade_company', newItem.grade_company)
@@ -1585,6 +1597,7 @@ function Search() {
     setSelectedFromScan(false)
     setShowCardScanner(false)
     setMatchingScan(true)
+    setScanProcessingLabel('Identifying card...')
     setMessage('Reading card...')
 
     const scanRequestStartedAt = performance.now()
@@ -1722,6 +1735,82 @@ function Search() {
     setScanAlternativesLoaded(true)
 
     cacheSearchResultImages(candidates)
+  }
+
+  async function handlePsaCertScan({ certNumber: scannedCert }) {
+    const cleanCert = String(scannedCert || '').replace(/[^\d]/g, '')
+
+    if (!cleanCert) {
+      setMessage('Vendly could not read that PSA certification number.')
+      return
+    }
+
+    setShowCardScanner(false)
+    setMatchingScan(true)
+    setScanProcessingLabel('Verifying PSA slab...')
+    setMessage('Checking PSA certification...')
+
+    const { data, error } = await supabase.functions.invoke(
+      'psa-cert-lookup',
+      {
+        body: {
+          cert_number: cleanCert,
+        },
+      }
+    )
+
+    setMatchingScan(false)
+
+    if (error || !data?.verified) {
+      console.error('PSA cert lookup failed:', error || data)
+      setMessage(
+        data?.error ||
+        'PSA could not verify this certification number.'
+      )
+      return
+    }
+
+    const candidate = data?.candidate || null
+    const psa = data?.psa || {}
+
+    if (!candidate) {
+      setMessage(
+        `PSA cert ${psa?.cert_number || cleanCert} was verified, but Vendly could not match the underlying card in PokéWallet yet.`
+      )
+      return
+    }
+
+    const detectedGrade =
+      String(psa?.numeric_grade || '').trim() ||
+      String(psa?.grade || '').match(/10|9\.5|9|8\.5|8|7\.5|7|6\.5|6|5|4|3|2|1/)?.[0] ||
+      '10'
+
+    setSelectedCard(candidate)
+    setSelectedFromScan(true)
+    setAddDestination(isVendor ? 'inventory' : 'wishlist')
+    setCondition('ANY')
+    setGradeCompany('PSA')
+    setGrade(detectedGrade)
+    setCertNumber(String(psa?.cert_number || cleanCert))
+    setListingPrice('')
+    setPurchasePrice('')
+    setTargetPrice('')
+    setPriority(2)
+    setNotificationsEnabled(true)
+    setQuantity(1)
+    setPhysicalLocation('')
+    setShowPublic(false)
+    setSelectedShowIds([])
+    setMessage('')
+
+    cacheSearchResultImages([candidate])
+
+    // PSA barcode intake is already known to be graded,
+    // so skip the Raw/Graded chooser.
+    setShowTypeModal(false)
+    setShowRawModal(false)
+    setShowDestinationModal(false)
+    setShowGradedModal(true)
   }
 
   const paginationItems = useMemo(() => {
@@ -2164,10 +2253,12 @@ function Search() {
             <div className="flex min-w-[210px] flex-col items-center rounded-2xl border border-white/10 bg-[#111]/95 px-7 py-6 shadow-2xl">
               <div className="h-11 w-11 animate-spin rounded-full border-4 border-white/15 border-t-yellow-300" />
               <p className="mt-4 text-sm font-semibold text-white">
-                Identifying card...
+                {scanProcessingLabel}
               </p>
               <p className="mt-1 text-xs text-gray-500">
-                Reading card + checking PokéWallet
+                {scanProcessingLabel === 'Verifying PSA slab...'
+                  ? 'Checking PSA certification + matching PokéWallet'
+                  : 'Reading card + checking PokéWallet'}
               </p>
             </div>
           </div>
@@ -2604,12 +2695,16 @@ function Search() {
               <h2 className="text-xl font-semibold">Add Item</h2>
               <button
                 onClick={() => {
+                  // X means cancel the entire add flow.
+                  // Do not navigate backward into Choose Destination.
                   setShowTypeModal(false)
-                  if (isVendor) {
-                    setShowDestinationModal(true)
-                  } else {
-                    setSelectedCard(null)
-                  }
+                  setShowDestinationModal(false)
+                  setShowRawModal(false)
+                  setShowGradedModal(false)
+                  setSelectedCard(null)
+                  setSelectedFromScan(false)
+                  setAddDestination('')
+                  setCertNumber('')
                 }}
               >
                 <X size={22} />
@@ -2829,6 +2924,23 @@ function Search() {
               </option>
             ))}
           </select>
+
+          {gradeCompany === 'PSA' && (
+            <>
+              <label className="mb-2 block text-sm text-gray-400">
+                PSA Certification # <span className="text-gray-600">(optional)</span>
+              </label>
+              <input
+                inputMode="numeric"
+                placeholder="Example: 12345678"
+                value={certNumber}
+                onChange={(e) =>
+                  setCertNumber(e.target.value.replace(/[^\d]/g, ''))
+                }
+                className="mb-4 w-full rounded-xl border border-[#222] bg-black p-3 text-white outline-none"
+              />
+            </>
+          )}
         </AddModal>
       )}
 
@@ -3023,6 +3135,7 @@ function Search() {
         open={showCardScanner}
         onClose={() => setShowCardScanner(false)}
         onConfirm={handleScanPhoto}
+        onPsaCert={handlePsaCertScan}
       />
 
       <Navbar />

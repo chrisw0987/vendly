@@ -1,8 +1,11 @@
 import { useEffect, useRef, useState } from 'react'
+import { BrowserMultiFormatReader } from '@zxing/browser'
 import {
+  BadgeCheck,
   Camera,
   ImagePlus,
   RotateCcw,
+  ScanBarcode,
   ScanLine,
   X,
 } from 'lucide-react'
@@ -61,193 +64,92 @@ async function normalizeUploadedImage(file) {
   }
 }
 
-function getGuideCrop(video) {
-  const sourceWidth = video.videoWidth
-  const sourceHeight = video.videoHeight
-  const cardAspect = 2.5 / 3.5
+function extractPsaCertNumber(rawValue) {
+  const raw = String(rawValue || '').trim()
+  if (!raw) return ''
 
-  let cropWidth = sourceWidth * 0.72
-  let cropHeight = cropWidth / cardAspect
+  // PSA barcodes may decode as the cert itself or as text/URL containing it.
+  const groups = raw.match(/\d{7,12}/g) || []
+  if (groups.length === 0) return ''
 
-  if (cropHeight > sourceHeight * 0.82) {
-    cropHeight = sourceHeight * 0.82
-    cropWidth = cropHeight * cardAspect
-  }
-
-  return {
-    sx: Math.max(0, (sourceWidth - cropWidth) / 2),
-    sy: Math.max(0, (sourceHeight - cropHeight) / 2),
-    cropWidth,
-    cropHeight,
-  }
+  return groups.sort((a, b) => b.length - a.length)[0]
 }
 
-function analyzeFrame(video, canvas, previousFrame) {
-  if (!video?.videoWidth || !video?.videoHeight) {
-    return {
-      ready: false,
-      stable: false,
-      sharpEnough: false,
-      exposedWell: false,
-      edgeEnough: false,
-      frame: null,
-    }
-  }
-
-  const { sx, sy, cropWidth, cropHeight } = getGuideCrop(video)
-
-  const width = 96
-  const height = Math.round(width / (2.5 / 3.5))
-
-  canvas.width = width
-  canvas.height = height
-
-  const context = canvas.getContext('2d', {
-    willReadFrequently: true,
-  })
-
-  if (!context) {
-    return {
-      ready: false,
-      stable: false,
-      sharpEnough: false,
-      exposedWell: false,
-      edgeEnough: false,
-      frame: null,
-    }
-  }
-
-  context.drawImage(
-    video,
-    sx,
-    sy,
-    cropWidth,
-    cropHeight,
-    0,
-    0,
-    width,
-    height
-  )
-
-  const imageData = context.getImageData(0, 0, width, height)
-  const pixels = imageData.data
-  const grayscale = new Uint8Array(width * height)
-
-  let brightnessTotal = 0
-
-  for (let i = 0, p = 0; i < pixels.length; i += 4, p += 1) {
-    const gray =
-      pixels[i] * 0.299 +
-      pixels[i + 1] * 0.587 +
-      pixels[i + 2] * 0.114
-
-    grayscale[p] = gray
-    brightnessTotal += gray
-  }
-
-  const averageBrightness = brightnessTotal / grayscale.length
-  const exposedWell =
-    averageBrightness >= 45 &&
-    averageBrightness <= 220
-
-  // Simple edge / sharpness estimate.
-  let edgeTotal = 0
-  let strongEdges = 0
-  let samples = 0
-
-  for (let y = 1; y < height - 1; y += 2) {
-    for (let x = 1; x < width - 1; x += 2) {
-      const index = y * width + x
-
-      const gx =
-        Math.abs(grayscale[index + 1] - grayscale[index - 1])
-
-      const gy =
-        Math.abs(grayscale[index + width] - grayscale[index - width])
-
-      const edge = gx + gy
-
-      edgeTotal += edge
-      samples += 1
-
-      if (edge > 48) {
-        strongEdges += 1
-      }
-    }
-  }
-
-  const averageEdge = samples ? edgeTotal / samples : 0
-  const edgeDensity = samples ? strongEdges / samples : 0
-
-  const sharpEnough = averageEdge >= 18
-  const edgeEnough = edgeDensity >= 0.08
-
-  let stable = false
-
-  if (previousFrame && previousFrame.length === grayscale.length) {
-    let diffTotal = 0
-
-    // Sample every other pixel. We only need a rough motion estimate.
-    for (let i = 0; i < grayscale.length; i += 2) {
-      diffTotal += Math.abs(grayscale[i] - previousFrame[i])
-    }
-
-    const averageDiff =
-      diffTotal / Math.ceil(grayscale.length / 2)
-
-    stable = averageDiff <= 8.5
-  }
-
-  return {
-    ready: exposedWell && sharpEnough && edgeEnough,
-    stable,
-    sharpEnough,
-    exposedWell,
-    edgeEnough,
-    frame: grayscale,
-  }
-}
-
-function CardScanner({ open, onClose, onConfirm }) {
+function CardScanner({
+  open,
+  onClose,
+  onConfirm,
+  onPsaCert,
+}) {
   const videoRef = useRef(null)
   const streamRef = useRef(null)
   const fileInputRef = useRef(null)
+
   const analysisCanvasRef = useRef(null)
   const previousFrameRef = useRef(null)
   const stableFrameCountRef = useRef(0)
   const autoCaptureLockedRef = useRef(false)
   const cameraStartedAtRef = useRef(0)
 
+  const barcodeReaderRef = useRef(null)
+  const barcodeCanvasRef = useRef(null)
+  const barcodeTimerRef = useRef(null)
+  const barcodeLockedRef = useRef(false)
+
   const [cameraError, setCameraError] = useState('')
   const [capturedImage, setCapturedImage] = useState('')
   const [startingCamera, setStartingCamera] = useState(false)
 
-  const [autoScanEnabled, setAutoScanEnabled] = useState(true)
+  // Keep the two top-level tabs simple:
+  // Auto Scan = raw-card vision flow.
+  // PSA Slab = barcode/cert flow.
+  const [scanMode, setScanMode] = useState('auto')
   const [scanStatus, setScanStatus] = useState('Center card in frame')
+  const [psaCertInput, setPsaCertInput] = useState('')
+  const [psaBarcodeValue, setPsaBarcodeValue] = useState('')
 
   useEffect(() => {
     if (!open) {
+      stopBarcodeScan()
       stopCamera()
       setCapturedImage('')
       setCameraError('')
       setScanStatus('Center card in frame')
+      setPsaCertInput('')
+      setPsaBarcodeValue('')
       stableFrameCountRef.current = 0
       previousFrameRef.current = null
       autoCaptureLockedRef.current = false
+      barcodeLockedRef.current = false
       return
     }
 
     startCamera()
 
     return () => {
+      stopBarcodeScan()
       stopCamera()
     }
   }, [open])
 
   useEffect(() => {
+    if (!open || startingCamera || cameraError || capturedImage) return
+
+    if (scanMode === 'psa') {
+      startBarcodeScan()
+    } else {
+      stopBarcodeScan()
+    }
+
+    return () => {
+      if (scanMode === 'psa') stopBarcodeScan()
+    }
+  }, [open, scanMode, startingCamera, cameraError, capturedImage])
+
+  useEffect(() => {
     if (
       !open ||
-      !autoScanEnabled ||
+      scanMode !== 'auto' ||
       capturedImage ||
       startingCamera ||
       cameraError
@@ -260,23 +162,12 @@ function CardScanner({ open, onClose, onConfirm }) {
       if (!video?.videoWidth || !video?.videoHeight) return
       if (autoCaptureLockedRef.current) return
 
-      // Give Safari / the camera exposure a short moment to settle.
       if (Date.now() - cameraStartedAtRef.current < 1400) {
         setScanStatus('Getting camera ready...')
         return
       }
 
-      if (!analysisCanvasRef.current) {
-        analysisCanvasRef.current = document.createElement('canvas')
-      }
-
-      const analysis = analyzeFrame(
-        video,
-        analysisCanvasRef.current,
-        previousFrameRef.current
-      )
-
-      previousFrameRef.current = analysis.frame
+      const analysis = analyzeFrame(video)
 
       if (!analysis.exposedWell) {
         stableFrameCountRef.current = 0
@@ -298,13 +189,12 @@ function CardScanner({ open, onClose, onConfirm }) {
 
       stableFrameCountRef.current += 1
 
-      if (stableFrameCountRef.current === 1) {
-        setScanStatus('Card detected')
-      } else {
-        setScanStatus('Hold steady...')
-      }
+      setScanStatus(
+        stableFrameCountRef.current === 1
+          ? 'Card detected'
+          : 'Hold steady...'
+      )
 
-      // About 0.75 sec of stable frames at 250 ms intervals.
       if (stableFrameCountRef.current >= 3) {
         autoCaptureLockedRef.current = true
         setScanStatus('Capturing...')
@@ -315,22 +205,172 @@ function CardScanner({ open, onClose, onConfirm }) {
     return () => window.clearInterval(interval)
   }, [
     open,
-    autoScanEnabled,
+    scanMode,
     capturedImage,
     startingCamera,
     cameraError,
   ])
 
+  function getGuideCrop(video) {
+    const sourceWidth = video.videoWidth
+    const sourceHeight = video.videoHeight
+    const cardAspect = 2.5 / 3.5
+
+    let cropWidth = sourceWidth * 0.72
+    let cropHeight = cropWidth / cardAspect
+
+    if (cropHeight > sourceHeight * 0.82) {
+      cropHeight = sourceHeight * 0.82
+      cropWidth = cropHeight * cardAspect
+    }
+
+    return {
+      sx: Math.max(0, (sourceWidth - cropWidth) / 2),
+      sy: Math.max(0, (sourceHeight - cropHeight) / 2),
+      cropWidth,
+      cropHeight,
+    }
+  }
+
+  function analyzeFrame(video) {
+    if (!analysisCanvasRef.current) {
+      analysisCanvasRef.current = document.createElement('canvas')
+    }
+
+    const canvas = analysisCanvasRef.current
+
+    if (!video?.videoWidth || !video?.videoHeight) {
+      return {
+        stable: false,
+        sharpEnough: false,
+        exposedWell: false,
+        edgeEnough: false,
+      }
+    }
+
+    const { sx, sy, cropWidth, cropHeight } = getGuideCrop(video)
+
+    const width = 96
+    const height = Math.round(width / (2.5 / 3.5))
+
+    canvas.width = width
+    canvas.height = height
+
+    const context = canvas.getContext('2d', {
+      willReadFrequently: true,
+    })
+
+    if (!context) {
+      return {
+        stable: false,
+        sharpEnough: false,
+        exposedWell: false,
+        edgeEnough: false,
+      }
+    }
+
+    context.drawImage(
+      video,
+      sx,
+      sy,
+      cropWidth,
+      cropHeight,
+      0,
+      0,
+      width,
+      height
+    )
+
+    const imageData = context.getImageData(0, 0, width, height)
+    const pixels = imageData.data
+    const grayscale = new Uint8Array(width * height)
+
+    let brightnessTotal = 0
+
+    for (let i = 0, p = 0; i < pixels.length; i += 4, p += 1) {
+      const gray =
+        pixels[i] * 0.299 +
+        pixels[i + 1] * 0.587 +
+        pixels[i + 2] * 0.114
+
+      grayscale[p] = gray
+      brightnessTotal += gray
+    }
+
+    const averageBrightness = brightnessTotal / grayscale.length
+    const exposedWell =
+      averageBrightness >= 45 &&
+      averageBrightness <= 220
+
+    let edgeTotal = 0
+    let strongEdges = 0
+    let samples = 0
+
+    for (let y = 1; y < height - 1; y += 2) {
+      for (let x = 1; x < width - 1; x += 2) {
+        const index = y * width + x
+
+        const gx =
+          Math.abs(grayscale[index + 1] - grayscale[index - 1])
+
+        const gy =
+          Math.abs(grayscale[index + width] - grayscale[index - width])
+
+        const edge = gx + gy
+        edgeTotal += edge
+        samples += 1
+
+        if (edge > 48) strongEdges += 1
+      }
+    }
+
+    const averageEdge = samples ? edgeTotal / samples : 0
+    const edgeDensity = samples ? strongEdges / samples : 0
+
+    const sharpEnough = averageEdge >= 18
+    const edgeEnough = edgeDensity >= 0.08
+
+    let stable = false
+
+    if (
+      previousFrameRef.current &&
+      previousFrameRef.current.length === grayscale.length
+    ) {
+      let diffTotal = 0
+
+      for (let i = 0; i < grayscale.length; i += 2) {
+        diffTotal += Math.abs(
+          grayscale[i] - previousFrameRef.current[i]
+        )
+      }
+
+      const averageDiff =
+        diffTotal / Math.ceil(grayscale.length / 2)
+
+      stable = averageDiff <= 8.5
+    }
+
+    previousFrameRef.current = grayscale
+
+    return {
+      stable,
+      sharpEnough,
+      exposedWell,
+      edgeEnough,
+    }
+  }
+
   async function startCamera() {
     setStartingCamera(true)
     setCameraError('')
     setCapturedImage('')
-    setScanStatus('Opening camera...')
     stableFrameCountRef.current = 0
     previousFrameRef.current = null
     autoCaptureLockedRef.current = false
+    barcodeLockedRef.current = false
 
     try {
+      stopBarcodeScan()
       stopCamera()
 
       const stream = await navigator.mediaDevices.getUserMedia({
@@ -350,10 +390,11 @@ function CardScanner({ open, onClose, onConfirm }) {
       }
 
       cameraStartedAtRef.current = Date.now()
+
       setScanStatus(
-        autoScanEnabled
-          ? 'Center card in frame'
-          : 'Tap the camera button when ready'
+        scanMode === 'psa'
+          ? 'Aim at the PSA barcode'
+          : 'Center card in frame'
       )
     } catch (error) {
       console.error('Unable to open camera:', error)
@@ -382,6 +423,105 @@ function CardScanner({ open, onClose, onConfirm }) {
     }
   }
 
+  function stopBarcodeScan() {
+    if (barcodeTimerRef.current) {
+      window.clearInterval(barcodeTimerRef.current)
+      barcodeTimerRef.current = null
+    }
+  }
+
+  function startBarcodeScan() {
+    stopBarcodeScan()
+
+    if (!barcodeReaderRef.current) {
+      barcodeReaderRef.current = new BrowserMultiFormatReader()
+    }
+
+    if (!barcodeCanvasRef.current) {
+      barcodeCanvasRef.current = document.createElement('canvas')
+    }
+
+    setScanStatus('Aim at the PSA barcode')
+
+    barcodeTimerRef.current = window.setInterval(async () => {
+      const video = videoRef.current
+
+      if (
+        !video?.videoWidth ||
+        !video?.videoHeight ||
+        barcodeLockedRef.current ||
+        scanMode !== 'psa'
+      ) {
+        return
+      }
+
+      const canvas = barcodeCanvasRef.current
+      const context = canvas.getContext('2d')
+      if (!context) return
+
+      // Wide horizontal crop matching the PSA barcode guide.
+      const sourceWidth = video.videoWidth
+      const sourceHeight = video.videoHeight
+
+      const cropWidth = sourceWidth * 0.9
+      const cropHeight = sourceHeight * 0.38
+      const sx = (sourceWidth - cropWidth) / 2
+      const sy = (sourceHeight - cropHeight) / 2
+
+      const outputWidth = 900
+      const outputHeight = Math.round(
+        outputWidth * (cropHeight / cropWidth)
+      )
+
+      canvas.width = outputWidth
+      canvas.height = outputHeight
+
+      context.drawImage(
+        video,
+        sx,
+        sy,
+        cropWidth,
+        cropHeight,
+        0,
+        0,
+        outputWidth,
+        outputHeight
+      )
+
+      try {
+        const result =
+          barcodeReaderRef.current.decodeFromCanvas(canvas)
+
+        const rawValue =
+          typeof result?.getText === 'function'
+            ? result.getText()
+            : String(result?.text || '')
+
+        const certNumber = extractPsaCertNumber(rawValue)
+
+        if (!certNumber) {
+          setScanStatus('Barcode found — move closer')
+          return
+        }
+
+        barcodeLockedRef.current = true
+        stopBarcodeScan()
+        setPsaBarcodeValue(rawValue)
+        setPsaCertInput(certNumber)
+        setScanStatus(`PSA cert ${certNumber} detected`)
+
+        window.setTimeout(() => {
+          onPsaCert?.({
+            certNumber,
+            rawValue,
+          })
+        }, 250)
+      } catch {
+        // No barcode on this frame. Keep scanning quietly.
+      }
+    }, 350)
+  }
+
   function capturePhoto(autoCaptured = false) {
     const video = videoRef.current
     if (!video || !video.videoWidth || !video.videoHeight) {
@@ -389,8 +529,6 @@ function CardScanner({ open, onClose, onConfirm }) {
       return
     }
 
-    const sourceWidth = video.videoWidth
-    const sourceHeight = video.videoHeight
     const { sx, sy, cropWidth, cropHeight } = getGuideCrop(video)
 
     const canvas = document.createElement('canvas')
@@ -418,7 +556,11 @@ function CardScanner({ open, onClose, onConfirm }) {
     const imageDataUrl = canvas.toDataURL('image/jpeg', 0.95)
 
     setCapturedImage(imageDataUrl)
-    setScanStatus(autoCaptured ? 'Card captured automatically' : 'Photo captured')
+    setScanStatus(
+      autoCaptured
+        ? 'Card captured automatically'
+        : 'Photo captured'
+    )
     stopCamera()
   }
 
@@ -427,6 +569,7 @@ function CardScanner({ open, onClose, onConfirm }) {
     stableFrameCountRef.current = 0
     previousFrameRef.current = null
     autoCaptureLockedRef.current = false
+    barcodeLockedRef.current = false
     startCamera()
   }
 
@@ -459,12 +602,15 @@ function CardScanner({ open, onClose, onConfirm }) {
     if (!capturedImage) return
 
     try {
-      const numberRegionDataUrl = await cropImageRegion(capturedImage, {
-        x: 0,
-        y: 0.66,
-        width: 1,
-        height: 0.34,
-      })
+      const numberRegionDataUrl = await cropImageRegion(
+        capturedImage,
+        {
+          x: 0,
+          y: 0.66,
+          width: 1,
+          height: 0.34,
+        }
+      )
 
       onConfirm?.({
         imageDataUrl: capturedImage,
@@ -477,6 +623,23 @@ function CardScanner({ open, onClose, onConfirm }) {
         imageDataUrl: capturedImage,
       })
     }
+  }
+
+  function submitManualCert() {
+    const certNumber = extractPsaCertNumber(psaCertInput)
+
+    if (!certNumber) {
+      setScanStatus('Enter a valid PSA cert number')
+      return
+    }
+
+    barcodeLockedRef.current = true
+    stopBarcodeScan()
+
+    onPsaCert?.({
+      certNumber,
+      rawValue: psaBarcodeValue || certNumber,
+    })
   }
 
   if (!open) return null
@@ -492,9 +655,13 @@ function CardScanner({ open, onClose, onConfirm }) {
       >
         <div className="flex shrink-0 items-start justify-between gap-4 px-5 pb-3">
           <div className="min-w-0">
-            <p className="text-lg font-bold">Scan Card</p>
+            <p className="text-lg font-bold">
+              {scanMode === 'psa' ? 'Scan PSA Slab' : 'Scan Card'}
+            </p>
             <p className="mt-1 text-xs text-gray-500">
-              Center one Pokémon card inside the frame.
+              {scanMode === 'psa'
+                ? 'Aim the camera at the PSA barcode.'
+                : 'Center one Pokémon card inside the frame.'}
             </p>
           </div>
 
@@ -513,15 +680,17 @@ function CardScanner({ open, onClose, onConfirm }) {
             <button
               type="button"
               onClick={() => {
-                setAutoScanEnabled(true)
+                setScanMode('auto')
+                stopBarcodeScan()
+                barcodeLockedRef.current = false
                 stableFrameCountRef.current = 0
                 previousFrameRef.current = null
                 autoCaptureLockedRef.current = false
                 setScanStatus('Center card in frame')
               }}
               className={`flex items-center justify-center gap-2 rounded-lg px-3 py-2 text-xs font-semibold transition ${
-                autoScanEnabled
-                  ? 'bg-yellow-300 text-black'
+                scanMode === 'auto'
+                  ? 'bg-white text-black'
                   : 'text-gray-400'
               }`}
             >
@@ -532,19 +701,26 @@ function CardScanner({ open, onClose, onConfirm }) {
             <button
               type="button"
               onClick={() => {
-                setAutoScanEnabled(false)
+                setScanMode('psa')
                 stableFrameCountRef.current = 0
                 previousFrameRef.current = null
                 autoCaptureLockedRef.current = false
-                setScanStatus('Tap the camera button when ready')
+                barcodeLockedRef.current = false
+                setCapturedImage('')
+                setScanStatus('Aim at the PSA barcode')
+
+                window.setTimeout(() => {
+                  if (streamRef.current) startBarcodeScan()
+                }, 100)
               }}
-              className={`rounded-lg px-3 py-2 text-xs font-semibold transition ${
-                !autoScanEnabled
+              className={`flex items-center justify-center gap-2 rounded-lg px-3 py-2 text-xs font-semibold transition ${
+                scanMode === 'psa'
                   ? 'bg-white text-black'
                   : 'text-gray-400'
               }`}
             >
-              Manual
+              <ScanBarcode size={16} />
+              PSA Slab
             </button>
           </div>
 
@@ -561,18 +737,24 @@ function CardScanner({ open, onClose, onConfirm }) {
 
                 <div className="pointer-events-none absolute inset-0 bg-black/20" />
 
-                <div className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center p-8">
-                  <div
-                    className={`aspect-[2.5/3.5] h-auto max-h-[82%] w-[72%] max-w-[285px] rounded-2xl border-2 transition ${
-                      autoScanEnabled
-                        ? scanStatus === 'Hold steady...' ||
-                          scanStatus === 'Card detected'
+                {scanMode === 'auto' ? (
+                  <div className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center p-8">
+                    <div
+                      className={`aspect-[2.5/3.5] h-auto max-h-[82%] w-[72%] max-w-[285px] rounded-2xl border-2 transition ${
+                        scanStatus === 'Hold steady...' ||
+                        scanStatus === 'Card detected'
                           ? 'border-green-400 shadow-[0_0_26px_rgba(74,222,128,0.22),0_0_0_9999px_rgba(0,0,0,0.28)]'
                           : 'border-yellow-300 shadow-[0_0_0_9999px_rgba(0,0,0,0.28)]'
-                        : 'border-white/80 shadow-[0_0_0_9999px_rgba(0,0,0,0.28)]'
-                    }`}
-                  />
-                </div>
+                      }`}
+                    />
+                  </div>
+                ) : (
+                  <div className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center px-7">
+                    <div className="relative h-[32%] w-full max-w-[420px] rounded-2xl border-2 border-red-400 shadow-[0_0_0_9999px_rgba(0,0,0,0.30)]">
+                      <div className="absolute inset-x-6 top-1/2 h-[2px] -translate-y-1/2 bg-red-400/80 shadow-[0_0_12px_rgba(248,113,113,0.8)]" />
+                    </div>
+                  </div>
+                )}
 
                 {!startingCamera && !cameraError && (
                   <div className="pointer-events-none absolute inset-x-0 bottom-5 z-20 flex justify-center px-5">
@@ -630,12 +812,49 @@ function CardScanner({ open, onClose, onConfirm }) {
               className="hidden"
             />
 
-            {!capturedImage ? (
+            {scanMode === 'psa' ? (
+              <div>
+                <div className="mb-3 flex items-center gap-2 rounded-xl border border-[#222] bg-[#111] px-3 py-2">
+                  <BadgeCheck size={17} className="shrink-0 text-red-300" />
+                  <input
+                    inputMode="numeric"
+                    placeholder="Or enter PSA cert number"
+                    value={psaCertInput}
+                    onChange={(event) =>
+                      setPsaCertInput(
+                        event.target.value.replace(/[^\d]/g, '')
+                      )
+                    }
+                    onKeyDown={(event) => {
+                      if (event.key === 'Enter') {
+                        event.preventDefault()
+                        submitManualCert()
+                      }
+                    }}
+                    className="min-w-0 flex-1 bg-transparent text-sm text-white outline-none placeholder:text-gray-600"
+                  />
+                  <button
+                    type="button"
+                    onClick={submitManualCert}
+                    disabled={!psaCertInput.trim()}
+                    className="rounded-lg bg-white px-3 py-2 text-xs font-bold text-black disabled:opacity-40"
+                  >
+                    Verify
+                  </button>
+                </div>
+
+                <p className="text-center text-xs text-gray-400">
+                  Hold the PSA barcode inside the red guide. Vendly will verify the cert automatically.
+                </p>
+
+                <p className="mt-2 text-center text-[11px] text-gray-600">
+                  Cert entry is included for desktop testing or hard-to-read labels.
+                </p>
+              </div>
+            ) : !capturedImage ? (
               <>
                 <p className="text-center text-xs text-gray-400">
-                  {autoScanEnabled
-                    ? 'Hold the card inside the frame. Vendly will capture when it is steady.'
-                    : 'Fill the frame with the card and avoid glare.'}
+                  Hold the card inside the frame. Vendly will capture when it is steady.
                 </p>
 
                 <div className="mt-3 flex items-center justify-center gap-4">
@@ -652,11 +871,7 @@ function CardScanner({ open, onClose, onConfirm }) {
                     type="button"
                     onClick={() => capturePhoto(false)}
                     disabled={startingCamera || !!cameraError}
-                    className={`flex h-14 w-14 items-center justify-center rounded-full border-4 text-black shadow-lg disabled:opacity-40 ${
-                      autoScanEnabled
-                        ? 'border-white/60 bg-[#1b1b1b] text-white'
-                        : 'border-white bg-yellow-300'
-                    }`}
+                    className="flex h-14 w-14 items-center justify-center rounded-full border-4 border-white/60 bg-[#1b1b1b] text-white shadow-lg disabled:opacity-40"
                     aria-label="Capture card manually"
                     title="Capture manually"
                   >

@@ -1,6 +1,11 @@
 import { useEffect, useRef, useState } from 'react'
-import { Camera, RotateCcw, X } from 'lucide-react'
-
+import {
+  Camera,
+  ImagePlus,
+  RotateCcw,
+  ScanLine,
+  X,
+} from 'lucide-react'
 
 function loadImage(src) {
   return new Promise((resolve, reject) => {
@@ -31,19 +36,204 @@ async function cropImageRegion(src, region) {
   return canvas.toDataURL('image/jpeg', 0.95)
 }
 
+async function normalizeUploadedImage(file) {
+  const objectUrl = URL.createObjectURL(file)
+
+  try {
+    const image = await loadImage(objectUrl)
+    const maxDimension = 1600
+    const scale = Math.min(
+      1,
+      maxDimension / Math.max(image.width, image.height)
+    )
+
+    const canvas = document.createElement('canvas')
+    canvas.width = Math.max(1, Math.round(image.width * scale))
+    canvas.height = Math.max(1, Math.round(image.height * scale))
+
+    const context = canvas.getContext('2d')
+    if (!context) throw new Error('Unable to prepare uploaded image.')
+
+    context.drawImage(image, 0, 0, canvas.width, canvas.height)
+    return canvas.toDataURL('image/jpeg', 0.92)
+  } finally {
+    URL.revokeObjectURL(objectUrl)
+  }
+}
+
+function getGuideCrop(video) {
+  const sourceWidth = video.videoWidth
+  const sourceHeight = video.videoHeight
+  const cardAspect = 2.5 / 3.5
+
+  let cropWidth = sourceWidth * 0.72
+  let cropHeight = cropWidth / cardAspect
+
+  if (cropHeight > sourceHeight * 0.82) {
+    cropHeight = sourceHeight * 0.82
+    cropWidth = cropHeight * cardAspect
+  }
+
+  return {
+    sx: Math.max(0, (sourceWidth - cropWidth) / 2),
+    sy: Math.max(0, (sourceHeight - cropHeight) / 2),
+    cropWidth,
+    cropHeight,
+  }
+}
+
+function analyzeFrame(video, canvas, previousFrame) {
+  if (!video?.videoWidth || !video?.videoHeight) {
+    return {
+      ready: false,
+      stable: false,
+      sharpEnough: false,
+      exposedWell: false,
+      edgeEnough: false,
+      frame: null,
+    }
+  }
+
+  const { sx, sy, cropWidth, cropHeight } = getGuideCrop(video)
+
+  const width = 96
+  const height = Math.round(width / (2.5 / 3.5))
+
+  canvas.width = width
+  canvas.height = height
+
+  const context = canvas.getContext('2d', {
+    willReadFrequently: true,
+  })
+
+  if (!context) {
+    return {
+      ready: false,
+      stable: false,
+      sharpEnough: false,
+      exposedWell: false,
+      edgeEnough: false,
+      frame: null,
+    }
+  }
+
+  context.drawImage(
+    video,
+    sx,
+    sy,
+    cropWidth,
+    cropHeight,
+    0,
+    0,
+    width,
+    height
+  )
+
+  const imageData = context.getImageData(0, 0, width, height)
+  const pixels = imageData.data
+  const grayscale = new Uint8Array(width * height)
+
+  let brightnessTotal = 0
+
+  for (let i = 0, p = 0; i < pixels.length; i += 4, p += 1) {
+    const gray =
+      pixels[i] * 0.299 +
+      pixels[i + 1] * 0.587 +
+      pixels[i + 2] * 0.114
+
+    grayscale[p] = gray
+    brightnessTotal += gray
+  }
+
+  const averageBrightness = brightnessTotal / grayscale.length
+  const exposedWell =
+    averageBrightness >= 45 &&
+    averageBrightness <= 220
+
+  // Simple edge / sharpness estimate.
+  let edgeTotal = 0
+  let strongEdges = 0
+  let samples = 0
+
+  for (let y = 1; y < height - 1; y += 2) {
+    for (let x = 1; x < width - 1; x += 2) {
+      const index = y * width + x
+
+      const gx =
+        Math.abs(grayscale[index + 1] - grayscale[index - 1])
+
+      const gy =
+        Math.abs(grayscale[index + width] - grayscale[index - width])
+
+      const edge = gx + gy
+
+      edgeTotal += edge
+      samples += 1
+
+      if (edge > 48) {
+        strongEdges += 1
+      }
+    }
+  }
+
+  const averageEdge = samples ? edgeTotal / samples : 0
+  const edgeDensity = samples ? strongEdges / samples : 0
+
+  const sharpEnough = averageEdge >= 18
+  const edgeEnough = edgeDensity >= 0.08
+
+  let stable = false
+
+  if (previousFrame && previousFrame.length === grayscale.length) {
+    let diffTotal = 0
+
+    // Sample every other pixel. We only need a rough motion estimate.
+    for (let i = 0; i < grayscale.length; i += 2) {
+      diffTotal += Math.abs(grayscale[i] - previousFrame[i])
+    }
+
+    const averageDiff =
+      diffTotal / Math.ceil(grayscale.length / 2)
+
+    stable = averageDiff <= 8.5
+  }
+
+  return {
+    ready: exposedWell && sharpEnough && edgeEnough,
+    stable,
+    sharpEnough,
+    exposedWell,
+    edgeEnough,
+    frame: grayscale,
+  }
+}
+
 function CardScanner({ open, onClose, onConfirm }) {
   const videoRef = useRef(null)
   const streamRef = useRef(null)
+  const fileInputRef = useRef(null)
+  const analysisCanvasRef = useRef(null)
+  const previousFrameRef = useRef(null)
+  const stableFrameCountRef = useRef(0)
+  const autoCaptureLockedRef = useRef(false)
+  const cameraStartedAtRef = useRef(0)
 
   const [cameraError, setCameraError] = useState('')
   const [capturedImage, setCapturedImage] = useState('')
   const [startingCamera, setStartingCamera] = useState(false)
+
+  const [autoScanEnabled, setAutoScanEnabled] = useState(true)
+  const [scanStatus, setScanStatus] = useState('Center card in frame')
 
   useEffect(() => {
     if (!open) {
       stopCamera()
       setCapturedImage('')
       setCameraError('')
+      setScanStatus('Center card in frame')
+      stableFrameCountRef.current = 0
+      previousFrameRef.current = null
+      autoCaptureLockedRef.current = false
       return
     }
 
@@ -54,10 +244,91 @@ function CardScanner({ open, onClose, onConfirm }) {
     }
   }, [open])
 
+  useEffect(() => {
+    if (
+      !open ||
+      !autoScanEnabled ||
+      capturedImage ||
+      startingCamera ||
+      cameraError
+    ) {
+      return
+    }
+
+    const interval = window.setInterval(() => {
+      const video = videoRef.current
+      if (!video?.videoWidth || !video?.videoHeight) return
+      if (autoCaptureLockedRef.current) return
+
+      // Give Safari / the camera exposure a short moment to settle.
+      if (Date.now() - cameraStartedAtRef.current < 1400) {
+        setScanStatus('Getting camera ready...')
+        return
+      }
+
+      if (!analysisCanvasRef.current) {
+        analysisCanvasRef.current = document.createElement('canvas')
+      }
+
+      const analysis = analyzeFrame(
+        video,
+        analysisCanvasRef.current,
+        previousFrameRef.current
+      )
+
+      previousFrameRef.current = analysis.frame
+
+      if (!analysis.exposedWell) {
+        stableFrameCountRef.current = 0
+        setScanStatus('Adjust lighting')
+        return
+      }
+
+      if (!analysis.sharpEnough || !analysis.edgeEnough) {
+        stableFrameCountRef.current = 0
+        setScanStatus('Move closer to the card')
+        return
+      }
+
+      if (!analysis.stable) {
+        stableFrameCountRef.current = 0
+        setScanStatus('Hold card steady')
+        return
+      }
+
+      stableFrameCountRef.current += 1
+
+      if (stableFrameCountRef.current === 1) {
+        setScanStatus('Card detected')
+      } else {
+        setScanStatus('Hold steady...')
+      }
+
+      // About 0.75 sec of stable frames at 250 ms intervals.
+      if (stableFrameCountRef.current >= 3) {
+        autoCaptureLockedRef.current = true
+        setScanStatus('Capturing...')
+        capturePhoto(true)
+      }
+    }, 250)
+
+    return () => window.clearInterval(interval)
+  }, [
+    open,
+    autoScanEnabled,
+    capturedImage,
+    startingCamera,
+    cameraError,
+  ])
+
   async function startCamera() {
     setStartingCamera(true)
     setCameraError('')
     setCapturedImage('')
+    setScanStatus('Opening camera...')
+    stableFrameCountRef.current = 0
+    previousFrameRef.current = null
+    autoCaptureLockedRef.current = false
 
     try {
       stopCamera()
@@ -77,6 +348,13 @@ function CardScanner({ open, onClose, onConfirm }) {
         videoRef.current.srcObject = stream
         await videoRef.current.play()
       }
+
+      cameraStartedAtRef.current = Date.now()
+      setScanStatus(
+        autoScanEnabled
+          ? 'Center card in frame'
+          : 'Tap the camera button when ready'
+      )
     } catch (error) {
       console.error('Unable to open camera:', error)
 
@@ -104,36 +382,26 @@ function CardScanner({ open, onClose, onConfirm }) {
     }
   }
 
-  function capturePhoto() {
+  function capturePhoto(autoCaptured = false) {
     const video = videoRef.current
-    if (!video || !video.videoWidth || !video.videoHeight) return
-
-    // IMPORTANT:
-    // Capture the card-shaped area in the CENTER of the camera instead of
-    // OCRing the entire camera frame. The yellow guide is centered, so this
-    // keeps the card itself as the image Vendly analyzes.
-    const sourceWidth = video.videoWidth
-    const sourceHeight = video.videoHeight
-    const cardAspect = 2.5 / 3.5
-
-    let cropWidth = sourceWidth * 0.72
-    let cropHeight = cropWidth / cardAspect
-
-    // If the calculated crop is too tall, constrain by height instead.
-    if (cropHeight > sourceHeight * 0.82) {
-      cropHeight = sourceHeight * 0.82
-      cropWidth = cropHeight * cardAspect
+    if (!video || !video.videoWidth || !video.videoHeight) {
+      autoCaptureLockedRef.current = false
+      return
     }
 
-    const sx = Math.max(0, (sourceWidth - cropWidth) / 2)
-    const sy = Math.max(0, (sourceHeight - cropHeight) / 2)
+    const sourceWidth = video.videoWidth
+    const sourceHeight = video.videoHeight
+    const { sx, sy, cropWidth, cropHeight } = getGuideCrop(video)
 
     const canvas = document.createElement('canvas')
     canvas.width = Math.round(cropWidth)
     canvas.height = Math.round(cropHeight)
 
     const context = canvas.getContext('2d')
-    if (!context) return
+    if (!context) {
+      autoCaptureLockedRef.current = false
+      return
+    }
 
     context.drawImage(
       video,
@@ -148,30 +416,82 @@ function CardScanner({ open, onClose, onConfirm }) {
     )
 
     const imageDataUrl = canvas.toDataURL('image/jpeg', 0.95)
+
     setCapturedImage(imageDataUrl)
+    setScanStatus(autoCaptured ? 'Card captured automatically' : 'Photo captured')
     stopCamera()
   }
 
   function retakePhoto() {
     setCapturedImage('')
+    stableFrameCountRef.current = 0
+    previousFrameRef.current = null
+    autoCaptureLockedRef.current = false
     startCamera()
   }
 
-  function confirmPhoto() {
+  async function handleFileUpload(event) {
+    const file = event.target.files?.[0]
+    event.target.value = ''
+
+    if (!file) return
+
+    if (!file.type.startsWith('image/')) {
+      setCameraError('Please choose an image file.')
+      return
+    }
+
+    try {
+      setCameraError('')
+      stopCamera()
+
+      const imageDataUrl = await normalizeUploadedImage(file)
+      setCapturedImage(imageDataUrl)
+      setStartingCamera(false)
+      setScanStatus('Photo uploaded')
+    } catch (error) {
+      console.error('Unable to prepare uploaded card photo:', error)
+      setCameraError('Unable to open that image. Please try another photo.')
+    }
+  }
+
+  async function confirmPhoto() {
     if (!capturedImage) return
 
-    onConfirm?.({
-      imageDataUrl: capturedImage,
-    })
+    try {
+      const numberRegionDataUrl = await cropImageRegion(capturedImage, {
+        x: 0,
+        y: 0.66,
+        width: 1,
+        height: 0.34,
+      })
+
+      onConfirm?.({
+        imageDataUrl: capturedImage,
+        numberRegionDataUrl,
+      })
+    } catch (error) {
+      console.error('Unable to prepare scan regions:', error)
+
+      onConfirm?.({
+        imageDataUrl: capturedImage,
+      })
+    }
   }
 
   if (!open) return null
 
   return (
-    <div className="fixed inset-0 z-[120] bg-black text-white">
-      <div className="mx-auto flex min-h-screen w-full max-w-[520px] flex-col">
-        <div className="flex items-center justify-between px-5 pb-3 pt-5">
-          <div>
+    <div className="fixed inset-0 z-[120] overflow-hidden bg-black text-white">
+      <div
+        className="mx-auto flex h-[100dvh] w-full max-w-[520px] flex-col overflow-hidden"
+        style={{
+          paddingTop: 'max(0.75rem, env(safe-area-inset-top))',
+          paddingBottom: 'max(1rem, env(safe-area-inset-bottom))',
+        }}
+      >
+        <div className="flex shrink-0 items-start justify-between gap-4 px-5 pb-3">
+          <div className="min-w-0">
             <p className="text-lg font-bold">Scan Card</p>
             <p className="mt-1 text-xs text-gray-500">
               Center one Pokémon card inside the frame.
@@ -181,15 +501,54 @@ function CardScanner({ open, onClose, onConfirm }) {
           <button
             type="button"
             onClick={onClose}
-            className="flex h-10 w-10 items-center justify-center rounded-full border border-[#2a2a2a] bg-[#111]"
+            className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full border border-[#2a2a2a] bg-[#111]"
             aria-label="Close scanner"
           >
             <X size={20} />
           </button>
         </div>
 
-        <div className="flex flex-1 flex-col px-5 pb-6">
-          <div className="relative flex min-h-[460px] flex-1 items-center justify-center overflow-hidden rounded-[28px] border border-[#242424] bg-[#0d0d0d]">
+        <div className="flex min-h-0 flex-1 flex-col px-5">
+          <div className="mb-3 grid shrink-0 grid-cols-2 rounded-xl border border-[#242424] bg-[#111] p-1">
+            <button
+              type="button"
+              onClick={() => {
+                setAutoScanEnabled(true)
+                stableFrameCountRef.current = 0
+                previousFrameRef.current = null
+                autoCaptureLockedRef.current = false
+                setScanStatus('Center card in frame')
+              }}
+              className={`flex items-center justify-center gap-2 rounded-lg px-3 py-2 text-xs font-semibold transition ${
+                autoScanEnabled
+                  ? 'bg-yellow-300 text-black'
+                  : 'text-gray-400'
+              }`}
+            >
+              <ScanLine size={16} />
+              Auto Scan
+            </button>
+
+            <button
+              type="button"
+              onClick={() => {
+                setAutoScanEnabled(false)
+                stableFrameCountRef.current = 0
+                previousFrameRef.current = null
+                autoCaptureLockedRef.current = false
+                setScanStatus('Tap the camera button when ready')
+              }}
+              className={`rounded-lg px-3 py-2 text-xs font-semibold transition ${
+                !autoScanEnabled
+                  ? 'bg-white text-black'
+                  : 'text-gray-400'
+              }`}
+            >
+              Manual
+            </button>
+          </div>
+
+          <div className="relative min-h-0 flex-1 overflow-hidden rounded-[28px] border border-[#242424] bg-[#0d0d0d]">
             {!capturedImage && (
               <>
                 <video
@@ -202,12 +561,26 @@ function CardScanner({ open, onClose, onConfirm }) {
 
                 <div className="pointer-events-none absolute inset-0 bg-black/20" />
 
-                <div className="pointer-events-none relative z-10 aspect-[2.5/3.5] w-[72%] max-w-[285px] rounded-2xl border-2 border-yellow-300 shadow-[0_0_0_9999px_rgba(0,0,0,0.28)]">
-                  <span className="absolute -left-0.5 -top-0.5 h-8 w-8 rounded-tl-2xl border-l-4 border-t-4 border-yellow-300" />
-                  <span className="absolute -right-0.5 -top-0.5 h-8 w-8 rounded-tr-2xl border-r-4 border-t-4 border-yellow-300" />
-                  <span className="absolute -bottom-0.5 -left-0.5 h-8 w-8 rounded-bl-2xl border-b-4 border-l-4 border-yellow-300" />
-                  <span className="absolute -bottom-0.5 -right-0.5 h-8 w-8 rounded-br-2xl border-b-4 border-r-4 border-yellow-300" />
+                <div className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center p-8">
+                  <div
+                    className={`aspect-[2.5/3.5] h-auto max-h-[82%] w-[72%] max-w-[285px] rounded-2xl border-2 transition ${
+                      autoScanEnabled
+                        ? scanStatus === 'Hold steady...' ||
+                          scanStatus === 'Card detected'
+                          ? 'border-green-400 shadow-[0_0_26px_rgba(74,222,128,0.22),0_0_0_9999px_rgba(0,0,0,0.28)]'
+                          : 'border-yellow-300 shadow-[0_0_0_9999px_rgba(0,0,0,0.28)]'
+                        : 'border-white/80 shadow-[0_0_0_9999px_rgba(0,0,0,0.28)]'
+                    }`}
+                  />
                 </div>
+
+                {!startingCamera && !cameraError && (
+                  <div className="pointer-events-none absolute inset-x-0 bottom-5 z-20 flex justify-center px-5">
+                    <div className="rounded-full border border-white/10 bg-black/75 px-4 py-2 text-xs font-semibold text-white backdrop-blur">
+                      {scanStatus}
+                    </div>
+                  </div>
+                )}
 
                 {startingCamera && (
                   <div className="absolute inset-0 z-20 flex items-center justify-center bg-black/70">
@@ -230,8 +603,8 @@ function CardScanner({ open, onClose, onConfirm }) {
               />
             )}
 
-            {cameraError && (
-              <div className="relative z-30 mx-5 rounded-2xl border border-red-900 bg-red-950/50 p-5 text-center">
+            {cameraError && !capturedImage && (
+              <div className="absolute inset-x-5 top-1/2 z-30 -translate-y-1/2 rounded-2xl border border-red-900 bg-red-950/90 p-5 text-center">
                 <Camera size={28} className="mx-auto text-red-300" />
                 <p className="mt-3 text-sm font-semibold text-red-200">
                   {cameraError}
@@ -242,50 +615,89 @@ function CardScanner({ open, onClose, onConfirm }) {
                   onClick={startCamera}
                   className="mt-4 rounded-xl bg-white px-4 py-3 text-sm font-bold text-black"
                 >
-                  Try Again
+                  Try Camera Again
                 </button>
               </div>
             )}
           </div>
 
-          {!cameraError && !capturedImage && (
-            <div className="pt-5 text-center">
-              <p className="text-sm text-gray-300">
-                Fill the yellow frame with the card and avoid glare.
-              </p>
+          <div className="shrink-0 pt-3">
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept="image/*"
+              onChange={handleFileUpload}
+              className="hidden"
+            />
 
-              <button
-                type="button"
-                onClick={capturePhoto}
-                disabled={startingCamera}
-                className="mx-auto mt-5 flex h-16 w-16 items-center justify-center rounded-full border-4 border-white bg-yellow-300 text-black shadow-lg disabled:opacity-50"
-                aria-label="Capture card"
-              >
-                <Camera size={25} />
-              </button>
-            </div>
-          )}
+            {!capturedImage ? (
+              <>
+                <p className="text-center text-xs text-gray-400">
+                  {autoScanEnabled
+                    ? 'Hold the card inside the frame. Vendly will capture when it is steady.'
+                    : 'Fill the frame with the card and avoid glare.'}
+                </p>
 
-          {capturedImage && (
-            <div className="grid grid-cols-2 gap-3 pt-5">
-              <button
-                type="button"
-                onClick={retakePhoto}
-                className="flex items-center justify-center gap-2 rounded-xl border border-[#2a2a2a] bg-[#111] p-4 text-sm font-semibold"
-              >
-                <RotateCcw size={17} />
-                Retake
-              </button>
+                <div className="mt-3 flex items-center justify-center gap-4">
+                  <button
+                    type="button"
+                    onClick={() => fileInputRef.current?.click()}
+                    className="flex h-12 items-center justify-center gap-2 rounded-xl border border-[#2a2a2a] bg-[#111] px-4 text-sm font-semibold text-gray-200"
+                  >
+                    <ImagePlus size={18} />
+                    Upload Photo
+                  </button>
 
-              <button
-                type="button"
-                onClick={confirmPhoto}
-                className="rounded-xl bg-white p-4 text-sm font-bold text-black"
-              >
-                Identify Card
-              </button>
-            </div>
-          )}
+                  <button
+                    type="button"
+                    onClick={() => capturePhoto(false)}
+                    disabled={startingCamera || !!cameraError}
+                    className={`flex h-14 w-14 items-center justify-center rounded-full border-4 text-black shadow-lg disabled:opacity-40 ${
+                      autoScanEnabled
+                        ? 'border-white/60 bg-[#1b1b1b] text-white'
+                        : 'border-white bg-yellow-300'
+                    }`}
+                    aria-label="Capture card manually"
+                    title="Capture manually"
+                  >
+                    <Camera size={23} />
+                  </button>
+                </div>
+
+                <p className="mt-2 text-center text-[11px] text-gray-600">
+                  Manual capture is always available. Upload Photo works for desktop testing too.
+                </p>
+              </>
+            ) : (
+              <div className="grid grid-cols-2 gap-3">
+                <button
+                  type="button"
+                  onClick={retakePhoto}
+                  className="flex items-center justify-center gap-2 rounded-xl border border-[#2a2a2a] bg-[#111] p-3 text-sm font-semibold"
+                >
+                  <RotateCcw size={17} />
+                  Retake
+                </button>
+
+                <button
+                  type="button"
+                  onClick={confirmPhoto}
+                  className="rounded-xl bg-white p-3 text-sm font-bold text-black"
+                >
+                  Identify Card
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => fileInputRef.current?.click()}
+                  className="col-span-2 flex items-center justify-center gap-2 rounded-xl border border-[#2a2a2a] bg-[#111] p-3 text-sm font-semibold text-gray-300"
+                >
+                  <ImagePlus size={17} />
+                  Choose Different Photo
+                </button>
+              </div>
+            )}
+          </div>
         </div>
       </div>
     </div>

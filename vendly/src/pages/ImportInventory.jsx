@@ -200,6 +200,23 @@ function PreviewStat({ label, value }) {
   )
 }
 
+function CardImagePlaceholder({ className = '' }) {
+  return (
+    <div
+      className={`flex shrink-0 flex-col items-center justify-center gap-1 rounded-lg bg-[#171717] px-1 text-center ${className}`}
+    >
+      <img
+        src="/vendly-logo.svg"
+        alt="Vendly"
+        className="max-h-8 max-w-[72%] object-contain opacity-80"
+      />
+      <p className="text-[8px] font-medium leading-tight text-gray-500">
+        Image Coming Soon
+      </p>
+    </div>
+  )
+}
+
 function ImportInventory() {
   const navigate = useNavigate()
   const location = useLocation()
@@ -2508,7 +2525,7 @@ function ImportInventory() {
                                   className="h-24 w-16 shrink-0 rounded-lg bg-black object-contain"
                                 />
                               ) : (
-                                <div className="h-24 w-16 shrink-0 rounded-lg bg-black" />
+                                <CardImagePlaceholder className="h-24 w-16" />
                               )}
 
                               <div className="min-w-0">
@@ -2582,7 +2599,7 @@ function ImportInventory() {
                                         className="h-20 w-14 shrink-0 rounded-lg bg-[#111] object-contain"
                                       />
                                     ) : (
-                                      <div className="h-20 w-14 shrink-0 rounded-lg bg-[#111]" />
+                                      <CardImagePlaceholder className="h-20 w-14" />
                                     )}
 
                                     <div className="min-w-0">
@@ -2955,7 +2972,7 @@ function ImportInventory() {
                                   className="h-20 w-14 shrink-0 rounded-lg object-contain"
                                 />
                               ) : (
-                                <div className="h-20 w-14 shrink-0 rounded-lg bg-[#111]" />
+                                <CardImagePlaceholder className="h-20 w-14" />
                               )}
 
                               <div className="min-w-0">
@@ -3005,7 +3022,7 @@ function ImportInventory() {
                                       className="h-20 w-14 shrink-0 rounded-lg object-contain"
                                     />
                                   ) : (
-                                    <div className="h-20 w-14 shrink-0 rounded-lg bg-black" />
+                                    <CardImagePlaceholder className="h-20 w-14" />
                                   )}
 
                                   <div className="min-w-0">

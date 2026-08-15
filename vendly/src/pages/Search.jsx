@@ -35,12 +35,19 @@ function Search() {
   const [loading, setLoading] = useState(false)
   const [showCardScanner, setShowCardScanner] = useState(false)
   const [capturedScanImage, setCapturedScanImage] = useState('')
+  const [capturedScanNumberRegion, setCapturedScanNumberRegion] = useState('')
   const [scanCandidates, setScanCandidates] = useState([])
   const [scanDetected, setScanDetected] = useState(null)
+  const [scanTimings, setScanTimings] = useState(null)
   const [showScanMatches, setShowScanMatches] = useState(false)
   const [matchingScan, setMatchingScan] = useState(false)
+  const [scanAlternativesLoading, setScanAlternativesLoading] = useState(false)
+  const [scanAlternativesLoaded, setScanAlternativesLoaded] = useState(false)
+  const [selectedFromScan, setSelectedFromScan] = useState(false)
   const [saving, setSaving] = useState(false)
   const [message, setMessage] = useState('')
+  const [imageLoadingIds, setImageLoadingIds] = useState(() => new Set())
+  const [imageUnavailableIds, setImageUnavailableIds] = useState(() => new Set())
 
   const [sortOption, setSortOption] = useState('')
   const [filterOption, setFilterOption] = useState('cards')
@@ -387,6 +394,53 @@ function Search() {
     if (card?.images?.small) return card.images.small
 
     return null
+  }
+
+  function setImageLoading(cardId, isLoading) {
+    if (!cardId) return
+
+    setImageLoadingIds((current) => {
+      const next = new Set(current)
+
+      if (isLoading) next.add(cardId)
+      else next.delete(cardId)
+
+      return next
+    })
+  }
+
+  function setImageUnavailable(cardId, isUnavailable = true) {
+    if (!cardId) return
+
+    setImageUnavailableIds((current) => {
+      const next = new Set(current)
+
+      if (isUnavailable) next.add(cardId)
+      else next.delete(cardId)
+
+      return next
+    })
+  }
+
+  function CardImagePlaceholder({ unavailable = false }) {
+    if (unavailable) {
+      return (
+        <div className="flex h-full w-full flex-col items-center justify-center gap-2 rounded-xl bg-[#171717] px-2 text-center">
+          <img
+            src="/vendly-logo.svg"
+            alt="Vendly"
+            className="max-h-10 max-w-[70%] object-contain opacity-80"
+          />
+          <p className="text-[10px] font-medium leading-tight text-gray-500">
+            Image Coming Soon
+          </p>
+        </div>
+      )
+    }
+
+    return (
+      <div className="h-full w-full animate-pulse rounded-xl bg-[#1a1a1a]" />
+    )
   }
 
   function getMarketPrice(card) {
@@ -878,15 +932,23 @@ function Search() {
     setInventoryCounts(counts)
   }
 
-  function openAddTypeModal(card) {
+  function openAddTypeModal(
+    card,
+    preferredDestination = null,
+    fromScan = false
+  ) {
+    const destination =
+      preferredDestination || (isVendor ? '' : 'wishlist')
+
     setSelectedCard(card)
+    setSelectedFromScan(fromScan)
     setListingPrice('')
     setPurchasePrice('')
     setTargetPrice('')
     setPriority(2)
     setNotificationsEnabled(true)
-    setAddDestination(isVendor ? '' : 'wishlist')
-    setCondition(isVendor ? 'NM' : 'ANY')
+    setAddDestination(destination)
+    setCondition(destination === 'wishlist' ? 'ANY' : 'NM')
     setGradeCompany('PSA')
     setGrade('10')
     setQuantity(1)
@@ -894,7 +956,7 @@ function Search() {
     setShowPublic(false)
     setSelectedShowIds([])
 
-    if (isVendor) {
+    if (isVendor && !preferredDestination) {
       setShowDestinationModal(true)
     } else {
       setShowTypeModal(true)
@@ -958,6 +1020,15 @@ function Search() {
       const cardId = getCardId(card)
       if (!cardId) return
 
+      if (getCardImage(card)) {
+        setImageLoading(cardId, false)
+        setImageUnavailable(cardId, false)
+        return
+      }
+
+      setImageLoading(cardId, true)
+      setImageUnavailable(cardId, false)
+
       if (localizedLanguage) {
         const availableCodes = Array.isArray(card?.image_languages)
           ? card.image_languages.map((value) =>
@@ -965,7 +1036,11 @@ function Search() {
             )
           : []
 
-        if (!availableCodes.includes(localizedLanguage)) return
+        if (!availableCodes.includes(localizedLanguage)) {
+          setImageLoading(cardId, false)
+          setImageUnavailable(cardId, true)
+          return
+        }
 
         const { data, error } = await supabase.functions.invoke(
           'pokewallet-localized-image',
@@ -980,10 +1055,15 @@ function Search() {
 
         if (error) {
           console.warn('Localized image cache failed:', error.message)
+          setImageLoading(cardId, false)
           return
         }
 
-        if (!data?.localized || !data?.image_url) return
+        if (!data?.localized || !data?.image_url) {
+          setImageLoading(cardId, false)
+          setImageUnavailable(cardId, true)
+          return
+        }
 
         setCards((currentCards) =>
           currentCards.map((currentCard) =>
@@ -997,8 +1077,8 @@ function Search() {
           )
         )
 
-        setScanCandidates((currentCandidates) =>
-          currentCandidates.map((currentCard) =>
+        setScanCandidates((currentCards) =>
+          currentCards.map((currentCard) =>
             getCardId(currentCard) === cardId
               ? {
                   ...currentCard,
@@ -1009,10 +1089,20 @@ function Search() {
           )
         )
 
+        setSelectedCard((currentCard) =>
+          currentCard && getCardId(currentCard) === cardId
+            ? {
+                ...currentCard,
+                image_url: data.image_url,
+                displayed_image_language: data.served_language,
+              }
+            : currentCard
+        )
+
+        setImageLoading(cardId, false)
+        setImageUnavailable(cardId, false)
         return
       }
-
-      if (card?.image_url) return
 
       const { data, error } = await supabase.functions.invoke(
         'pokewallet-cache-image',
@@ -1023,10 +1113,15 @@ function Search() {
 
       if (error) {
         console.warn('Background image cache failed:', error.message)
+        setImageLoading(cardId, false)
         return
       }
 
-      if (!data?.image_url) return
+      if (!data?.image_url) {
+        setImageLoading(cardId, false)
+        setImageUnavailable(cardId, true)
+        return
+      }
 
       setCards((currentCards) =>
         currentCards.map((currentCard) =>
@@ -1039,8 +1134,8 @@ function Search() {
         )
       )
 
-      setScanCandidates((currentCandidates) =>
-        currentCandidates.map((currentCard) =>
+      setScanCandidates((currentCards) =>
+        currentCards.map((currentCard) =>
           getCardId(currentCard) === cardId
             ? {
                 ...currentCard,
@@ -1049,6 +1144,18 @@ function Search() {
             : currentCard
         )
       )
+
+      setSelectedCard((currentCard) =>
+        currentCard && getCardId(currentCard) === cardId
+          ? {
+              ...currentCard,
+              image_url: data.image_url,
+            }
+          : currentCard
+      )
+
+      setImageLoading(cardId, false)
+      setImageUnavailable(cardId, false)
     })
   }
 
@@ -1465,6 +1572,7 @@ function Search() {
 
   async function handleScanPhoto(scanResult) {
     const imageDataUrl = scanResult?.imageDataUrl || ''
+    const numberRegionDataUrl = scanResult?.numberRegionDataUrl || ''
 
     if (!imageDataUrl) {
       setMessage('No card image was captured. Please try again.')
@@ -1472,18 +1580,26 @@ function Search() {
     }
 
     setCapturedScanImage(imageDataUrl)
+    setCapturedScanNumberRegion(numberRegionDataUrl)
+    setScanAlternativesLoaded(false)
+    setSelectedFromScan(false)
     setShowCardScanner(false)
     setMatchingScan(true)
-    setMessage('Identifying card...')
+    setMessage('Reading card...')
+
+    const scanRequestStartedAt = performance.now()
 
     const { data, error } = await supabase.functions.invoke(
       'pokewallet-scan-match',
       {
         body: {
           image_data_url: imageDataUrl,
+          number_region_data_url: numberRegionDataUrl,
         },
       }
     )
+
+    const clientTotalMs = Math.round(performance.now() - scanRequestStartedAt)
 
     setMatchingScan(false)
 
@@ -1497,33 +1613,115 @@ function Search() {
       ? data.candidates
       : []
 
-    setScanDetected(data?.detected || null)
-    setScanCandidates(candidates)
-    setShowScanMatches(true)
+    const detected = data?.detected || null
 
-    if (candidates.length === 0) {
-      setMessage('No confident card match found. Try scanning again.')
-    } else {
-      setMessage('')
-    }
+    setScanDetected(detected)
+    setScanTimings({
+      ...(data?.timings || {}),
+      client_total_ms: clientTotalMs,
+      fast_path: Boolean(data?.debug?.fast_path),
+    })
+    setScanCandidates(candidates)
+    setScanAlternativesLoaded(!data?.debug?.fast_path)
 
     cacheSearchResultImages(candidates)
+
+    if (candidates.length === 0) {
+      setShowScanMatches(true)
+      setMessage('No confident card match found. Try scanning again.')
+      return
+    }
+
+    setMessage('')
+
+    if (isConfidentScanResult(candidates)) {
+      setShowScanMatches(false)
+      openAddTypeModal(
+        candidates[0],
+        isVendor ? 'inventory' : 'wishlist',
+        true
+      )
+      return
+    }
+
+    setShowScanMatches(true)
   }
 
   function selectScannedCandidate(card) {
-    const query = getCardName(card)
-
     setShowScanMatches(false)
-    setScanCandidates([])
-    setScanDetected(null)
-    setCurrentPage(1)
-    setSearch(query)
-    setActiveSearchQuery(query)
 
-    searchCards(1, query, {
-      displayQuery: query,
-      updateActiveQuery: false,
+    openAddTypeModal(
+      card,
+      isVendor ? 'inventory' : 'wishlist',
+      true
+    )
+  }
+
+  function isConfidentScanResult(candidates) {
+    if (!Array.isArray(candidates) || candidates.length === 0) return false
+
+    const topScore = Number(candidates[0]?.match_score || 0)
+    const secondScore = Number(candidates[1]?.match_score || 0)
+
+    // Auto-advance only when confidence is genuinely high and there isn't
+    // another nearly-identical candidate competing with it.
+    if (topScore < 90) return false
+    if (candidates.length > 1 && topScore - secondScore < 10) return false
+
+    return true
+  }
+
+  async function showOtherScanMatches() {
+    setShowTypeModal(false)
+    setShowRawModal(false)
+    setShowGradedModal(false)
+    setShowDestinationModal(false)
+    setSelectedCard(null)
+    setSelectedFromScan(false)
+    setShowScanMatches(true)
+
+    if (scanAlternativesLoaded || scanCandidates.length > 1) return
+    if (!capturedScanImage || !scanDetected) return
+
+    setScanAlternativesLoading(true)
+
+    const startedAt = performance.now()
+
+    const { data, error } = await supabase.functions.invoke(
+      'pokewallet-scan-match',
+      {
+        body: {
+          image_data_url: capturedScanImage,
+          number_region_data_url: capturedScanNumberRegion,
+          force_expanded: true,
+          detected_override: scanDetected,
+        },
+      }
+    )
+
+    const clientTotalMs = Math.round(performance.now() - startedAt)
+    setScanAlternativesLoading(false)
+
+    if (error) {
+      console.error('Expanded scan match failed:', error)
+      setMessage('Unable to load other matches. Please try again.')
+      return
+    }
+
+    const candidates = Array.isArray(data?.candidates)
+      ? data.candidates
+      : []
+
+    setScanCandidates(candidates)
+    setScanDetected(data?.detected || scanDetected)
+    setScanTimings({
+      ...(data?.timings || {}),
+      client_total_ms: clientTotalMs,
+      fast_path: Boolean(data?.debug?.fast_path),
     })
+    setScanAlternativesLoaded(true)
+
+    cacheSearchResultImages(candidates)
   }
 
   const paginationItems = useMemo(() => {
@@ -2237,19 +2435,26 @@ function Search() {
                 return (
                   <div
                     key={cardId}
-                    className="flex gap-4 rounded-2xl border border-[#222] bg-[#111] p-3"
+                    className="flex min-h-[220px] items-start gap-5 rounded-2xl border border-[#222] bg-[#111] p-4"
                   >
-                    {imageUrl ? (
-                      <img
-                        src={imageUrl}
-                        alt={getCardName(card)}
-                        className="w-20 rounded-lg"
-                      />
-                    ) : (
-                      <div className="h-28 w-20 rounded-lg bg-[#1a1a1a]" />
-                    )}
+                    <div className="aspect-[2.5/3.5] w-[138px] shrink-0 overflow-hidden rounded-xl border border-[#262626] bg-[#181818] sm:w-[150px]">
+                      {imageUrl ? (
+                        <img
+                          src={imageUrl}
+                          alt={getCardName(card)}
+                          className="h-full w-full object-contain"
+                        />
+                      ) : (
+                        <CardImagePlaceholder
+                          unavailable={
+                            imageUnavailableIds.has(cardId) &&
+                            !imageLoadingIds.has(cardId)
+                          }
+                        />
+                      )}
+                    </div>
 
-                    <div className="flex-1">
+                    <div className="min-w-0 flex-1 pt-1">
                       <p className="font-medium">{getCardName(card)}</p>
 
                       <p className="mt-1 text-sm text-gray-400">
@@ -2411,10 +2616,36 @@ function Search() {
               </button>
             </div>
 
-            <p className="mb-4 text-sm text-gray-400">
-              Choose whether {getCardName(selectedCard)} is raw or graded for your{' '}
-              {addingToInventory ? 'vendor inventory' : 'wishlist'}.
-            </p>
+            <div className="mb-4 flex items-start gap-4 rounded-2xl border border-[#222] bg-black/60 p-3">
+              <div className="h-28 w-20 shrink-0 overflow-hidden rounded-xl border border-[#2a2a2a] bg-[#181818]">
+                {getCardImage(selectedCard) ? (
+                  <img
+                    src={getCardImage(selectedCard)}
+                    alt={getCardName(selectedCard)}
+                    className="h-full w-full object-contain"
+                  />
+                ) : (
+                  <div className="flex h-full w-full items-center justify-center px-2 text-center text-[10px] text-gray-600">
+                    Loading image...
+                  </div>
+                )}
+              </div>
+
+              <div className="min-w-0 pt-1">
+                <p className="font-bold text-white">
+                  {getCardName(selectedCard)}
+                </p>
+
+                <p className="mt-1 text-sm text-gray-400">
+                  {getSetName(selectedCard)} #{getCardNumber(selectedCard)}
+                </p>
+
+                <p className="mt-3 text-sm leading-5 text-gray-400">
+                  Choose whether this card is raw or graded for your{' '}
+                  {addingToInventory ? 'vendor inventory' : 'wishlist'}.
+                </p>
+              </div>
+            </div>
 
             <button
               onClick={() => {
@@ -2435,6 +2666,16 @@ function Search() {
             >
               Graded
             </button>
+
+            {selectedFromScan && (
+              <button
+                type="button"
+                onClick={showOtherScanMatches}
+                className="mt-4 w-full text-center text-sm font-semibold text-blue-300 hover:text-blue-200"
+              >
+                Not the right card?
+              </button>
+            )}
           </div>
         </div>
       )}
@@ -2478,6 +2719,7 @@ function Search() {
           addingToInventory={addingToInventory}
           saving={saving}
           onClose={() => setShowRawModal(false)}
+          onWrongCard={selectedFromScan ? showOtherScanMatches : null}
           onAdd={() =>
             addingToInventory ? addToInventory('raw') : addToWishlist('raw')
           }
@@ -2541,6 +2783,7 @@ function Search() {
           addingToInventory={addingToInventory}
           saving={saving}
           onClose={() => setShowGradedModal(false)}
+          onWrongCard={selectedFromScan ? showOtherScanMatches : null}
           onAdd={() =>
             addingToInventory ? addToInventory('graded') : addToWishlist('graded')
           }
@@ -2590,8 +2833,8 @@ function Search() {
       )}
 
       {showScanMatches && (
-        <div className="fixed inset-0 z-[116] overflow-y-auto bg-black/85 p-5">
-          <div className="mx-auto mt-8 w-full max-w-md rounded-2xl border border-[#222] bg-[#111] p-5">
+        <div className="fixed inset-0 z-[116] overflow-y-auto bg-black/85 px-4 pb-[calc(env(safe-area-inset-bottom)+1rem)] pt-[calc(env(safe-area-inset-top)+1rem)]">
+          <div className="mx-auto w-full max-w-md rounded-2xl border border-[#222] bg-[#111] p-5">
             <div className="mb-4 flex items-start justify-between gap-4">
               <div>
                 <h2 className="text-xl font-semibold">Possible Matches</h2>
@@ -2615,7 +2858,76 @@ function Search() {
               </button>
             </div>
 
-            {scanCandidates.length === 0 ? (
+
+            {scanTimings && (
+              <div className="mb-4 rounded-xl border border-[#2a2a2a] bg-black/60 p-3">
+                <div className="flex items-center justify-between gap-3">
+                  <p className="text-xs font-semibold uppercase tracking-wide text-gray-400">
+                    Temporary Scan Timing
+                  </p>
+                  <span className="rounded-full bg-[#1d1d1d] px-2 py-1 text-[10px] font-semibold text-gray-400">
+                    {scanTimings.fast_path ? 'Fast result' : 'Expanded search'}
+                  </span>
+                </div>
+
+                <div className="mt-3 grid grid-cols-2 gap-x-4 gap-y-2 text-xs">
+                  <span className="text-gray-500">OpenAI vision</span>
+                  <span className="text-right text-white">
+                    {scanTimings.openai_vision_ms != null
+                      ? `${(scanTimings.openai_vision_ms / 1000).toFixed(2)}s`
+                      : '—'}
+                  </span>
+
+                  <span className="text-gray-500">PokéWallet targeted</span>
+                  <span className="text-right text-white">
+                    {scanTimings.pokewallet_fast_search_ms != null
+                      ? `${(scanTimings.pokewallet_fast_search_ms / 1000).toFixed(2)}s`
+                      : '—'}
+                  </span>
+
+                  <span className="text-gray-500">PokéWallet expanded</span>
+                  <span className="text-right text-white">
+                    {scanTimings.pokewallet_fallback_ms != null
+                      ? `${(scanTimings.pokewallet_fallback_ms / 1000).toFixed(2)}s`
+                      : '—'}
+                  </span>
+
+                  <span className="text-gray-500">Candidate ranking</span>
+                  <span className="text-right text-white">
+                    {scanTimings.candidate_ranking_ms != null
+                      ? `${scanTimings.candidate_ranking_ms.toFixed(1)}ms`
+                      : '—'}
+                  </span>
+
+                  <span className="border-t border-[#222] pt-2 font-semibold text-gray-300">
+                    Edge Function total
+                  </span>
+                  <span className="border-t border-[#222] pt-2 text-right font-semibold text-white">
+                    {scanTimings.total_ms != null
+                      ? `${(scanTimings.total_ms / 1000).toFixed(2)}s`
+                      : '—'}
+                  </span>
+
+                  <span className="font-semibold text-yellow-300">
+                    Browser → result
+                  </span>
+                  <span className="text-right font-semibold text-yellow-300">
+                    {scanTimings.client_total_ms != null
+                      ? `${(scanTimings.client_total_ms / 1000).toFixed(2)}s`
+                      : '—'}
+                  </span>
+                </div>
+              </div>
+            )}
+
+            {scanAlternativesLoading ? (
+              <div className="rounded-xl border border-[#222] bg-black p-5 text-center">
+                <div className="mx-auto h-8 w-8 animate-spin rounded-full border-4 border-white/15 border-t-yellow-300" />
+                <p className="mt-3 text-sm font-semibold text-white">
+                  Finding other possible matches...
+                </p>
+              </div>
+            ) : scanCandidates.length === 0 ? (
               <div className="rounded-xl border border-[#222] bg-black p-5 text-center">
                 <p className="font-semibold text-white">No confident match</p>
                 <p className="mt-1 text-sm text-gray-500">
@@ -2626,6 +2938,9 @@ function Search() {
                   type="button"
                   onClick={() => {
                     setShowScanMatches(false)
+                    setScanTimings(null)
+                    setSelectedFromScan(false)
+                    setScanAlternativesLoaded(false)
                     setShowCardScanner(true)
                   }}
                   className="mt-4 rounded-xl bg-white px-4 py-3 text-sm font-bold text-black"
@@ -2689,6 +3004,9 @@ function Search() {
                   type="button"
                   onClick={() => {
                     setShowScanMatches(false)
+                    setScanTimings(null)
+                    setSelectedFromScan(false)
+                    setScanAlternativesLoaded(false)
                     setShowCardScanner(true)
                   }}
                   className="w-full rounded-xl border border-[#2a2a2a] bg-[#171717] p-3 text-sm font-semibold text-gray-300"
@@ -2750,19 +3068,32 @@ function AddModal({
   addingToInventory,
   saving,
   onClose,
+  onWrongCard,
   onAdd,
   children,
 }) {
   return (
-    <div className="fixed inset-0 z-50 overflow-y-auto bg-black/80 p-5">
-      <div className="mx-auto mt-8 w-full max-w-sm rounded-2xl border border-[#222] bg-[#111] p-5">
-        <div className="mb-4 flex items-center justify-between">
+    <div
+      className="fixed inset-0 z-[120] flex items-start justify-center bg-black/80 px-3"
+      style={{
+        paddingTop: 'max(0.75rem, env(safe-area-inset-top))',
+        paddingBottom: 'max(0.75rem, env(safe-area-inset-bottom))',
+      }}
+    >
+      <div className="flex max-h-[calc(100dvh-1.5rem-env(safe-area-inset-top)-env(safe-area-inset-bottom))] w-full max-w-sm flex-col overflow-hidden rounded-2xl border border-[#222] bg-[#111]">
+        <div className="flex shrink-0 items-center justify-between border-b border-[#1f1f1f] bg-[#111] px-5 py-4">
           <h2 className="text-xl font-semibold">{title}</h2>
-          <button onClick={onClose}>
-            <X size={22} />
+          <button
+            type="button"
+            onClick={onClose}
+            className="flex h-9 w-9 items-center justify-center rounded-full border border-[#2a2a2a] bg-[#171717]"
+            aria-label="Close"
+          >
+            <X size={20} />
           </button>
         </div>
 
+        <div className="min-h-0 flex-1 overflow-y-auto px-5 py-4">
         <div className="mb-5 flex gap-4">
           {imageUrl && (
             <img
@@ -2788,6 +3119,16 @@ function AddModal({
             </p>
           </div>
         </div>
+
+        {onWrongCard && (
+          <button
+            type="button"
+            onClick={onWrongCard}
+            className="mb-5 -mt-2 text-sm font-semibold text-blue-300 hover:text-blue-200"
+          >
+            Not the right card?
+          </button>
+        )}
 
         {children}
 
@@ -2987,17 +3328,26 @@ function AddModal({
           </label>
         )}
 
-        <button
-          onClick={onAdd}
-          disabled={saving}
-          className="w-full rounded-xl bg-white p-4 font-semibold text-black disabled:opacity-60"
+        </div>
+
+        <div
+          className="shrink-0 border-t border-[#1f1f1f] bg-[#111] px-5 pt-4"
+          style={{
+            paddingBottom: 'max(1rem, env(safe-area-inset-bottom))',
+          }}
         >
-          {saving
-            ? 'Adding...'
-            : addingToInventory
-            ? 'Add to Inventory'
-            : 'Add to Wishlist'}
-        </button>
+          <button
+            onClick={onAdd}
+            disabled={saving}
+            className="w-full rounded-xl bg-white p-4 font-semibold text-black disabled:opacity-60"
+          >
+            {saving
+              ? 'Adding...'
+              : addingToInventory
+              ? 'Add to Inventory'
+              : 'Add to Wishlist'}
+          </button>
+        </div>
       </div>
     </div>
   )

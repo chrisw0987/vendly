@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
+import { useNavigate } from 'react-router-dom'
 import { supabase } from '../lib/supabase'
 import Navbar from '../components/Navbar'
 import CardScanner from '../components/CardScanner'
@@ -25,6 +26,7 @@ import {
 } from 'lucide-react'
 
 function Search() {
+  const navigate = useNavigate()
   const [search, setSearch] = useState('')
   const [activeSearchQuery, setActiveSearchQuery] = useState('')
   const [cards, setCards] = useState([])
@@ -92,6 +94,8 @@ function Search() {
   const [vendorShows, setVendorShows] = useState([])
   const [selectedShowIds, setSelectedShowIds] = useState([])
   const [accountType, setAccountType] = useState('user')
+  const [currentUser, setCurrentUser] = useState(null)
+  const [showGuestPrompt, setShowGuestPrompt] = useState(false)
   const [searchStateRestored, setSearchStateRestored] = useState(false)
 
   const [discovery, setDiscovery] = useState({
@@ -103,6 +107,7 @@ function Search() {
   const [discoveryLoaded, setDiscoveryLoaded] = useState(false)
 
   const isVendor = accountType === 'vendor' || accountType === 'admin'
+  const isGuest = !currentUser
 
   useEffect(() => {
     if (searchPageMemory) {
@@ -154,9 +159,12 @@ function Search() {
 
     const {
       data: { subscription },
-    } = supabase.auth.onAuthStateChange((event) => {
+    } = supabase.auth.onAuthStateChange((event, session) => {
+      setCurrentUser(session?.user || null)
+
       if (event === 'SIGNED_OUT') {
         searchPageMemory = null
+        setAccountType('user')
       }
     })
 
@@ -529,7 +537,12 @@ function Search() {
       data: { user },
     } = await supabase.auth.getUser()
 
-    if (!user) return
+    setCurrentUser(user || null)
+
+    if (!user) {
+      setAccountType('user')
+      return
+    }
 
     const { data, error } = await supabase
       .from('users')
@@ -939,6 +952,13 @@ function Search() {
     preferredDestination = null,
     fromScan = false
   ) {
+    if (isGuest) {
+      setSelectedCard(card)
+      setSelectedFromScan(fromScan)
+      setShowGuestPrompt(true)
+      return
+    }
+
     const destination =
       preferredDestination || (isVendor ? '' : 'wishlist')
 
@@ -1737,52 +1757,61 @@ function Search() {
     cacheSearchResultImages(candidates)
   }
 
-  async function handlePsaCertScan({ certNumber: scannedCert }) {
-    const cleanCert = String(scannedCert || '').replace(/[^\d]/g, '')
+  async function handleSlabLabelScan(scanResult) {
+    const imageDataUrl = scanResult?.imageDataUrl || ''
+    const labelRegionDataUrl = scanResult?.labelRegionDataUrl || ''
 
-    if (!cleanCert) {
-      setMessage('Vendly could not read that PSA certification number.')
+    if (!imageDataUrl) {
+      setMessage('No slab image was captured. Please try again.')
       return
     }
 
     setShowCardScanner(false)
     setMatchingScan(true)
-    setScanProcessingLabel('Verifying PSA slab...')
-    setMessage('Checking PSA certification...')
+    setScanProcessingLabel('Reading Slab Label...')
+    setMessage('Reading Slab label...')
 
     const { data, error } = await supabase.functions.invoke(
-      'psa-cert-lookup',
+      'pokewallet-slab-match',
       {
         body: {
-          cert_number: cleanCert,
+          image_data_url: imageDataUrl,
+          label_region_data_url: labelRegionDataUrl,
         },
       }
     )
 
     setMatchingScan(false)
 
-    if (error || !data?.verified) {
-      console.error('PSA cert lookup failed:', error || data)
-      setMessage(
-        data?.error ||
-        'PSA could not verify this certification number.'
-      )
+    if (error || !data) {
+      console.error('Slab Label scan failed:', error || data)
+      setMessage('Vendly could not read this slab label. Please try another photo.')
       return
     }
 
     const candidate = data?.candidate || null
-    const psa = data?.psa || {}
+    const detected = data?.detected || {}
 
     if (!candidate) {
       setMessage(
-        `PSA cert ${psa?.cert_number || cleanCert} was verified, but Vendly could not match the underlying card in PokéWallet yet.`
+        detected?.card_name
+          ? `Vendly read ${detected.card_name}, but could not confidently match the underlying card.`
+          : 'Vendly could not confidently match the card on this slab label.'
       )
       return
     }
 
+    if (isGuest) {
+      setSelectedCard(candidate)
+      setSelectedFromScan(true)
+      setShowGuestPrompt(true)
+      setMessage('')
+      cacheSearchResultImages([candidate])
+      return
+    }
+
     const detectedGrade =
-      String(psa?.numeric_grade || '').trim() ||
-      String(psa?.grade || '').match(/10|9\.5|9|8\.5|8|7\.5|7|6\.5|6|5|4|3|2|1/)?.[0] ||
+      String(detected?.grade || '').match(/10|9\.5|9|8\.5|8|7\.5|7|6\.5|6|5|4|3|2|1/)?.[0] ||
       '10'
 
     setSelectedCard(candidate)
@@ -1791,7 +1820,7 @@ function Search() {
     setCondition('ANY')
     setGradeCompany('PSA')
     setGrade(detectedGrade)
-    setCertNumber(String(psa?.cert_number || cleanCert))
+    setCertNumber(String(detected?.cert_number || '').replace(/[^\d]/g, ''))
     setListingPrice('')
     setPurchasePrice('')
     setTargetPrice('')
@@ -1805,8 +1834,6 @@ function Search() {
 
     cacheSearchResultImages([candidate])
 
-    // PSA barcode intake is already known to be graded,
-    // so skip the Raw/Graded chooser.
     setShowTypeModal(false)
     setShowRawModal(false)
     setShowDestinationModal(false)
@@ -1847,9 +1874,104 @@ function Search() {
         <div className="mb-8">
           <h1 className="text-3xl font-bold">Search</h1>
           <p className="mt-1 text-sm text-gray-400">
-            {isVendor ? 'Search cards, sets, and add items to inventory.' : 'Search cards, sets, and add items to your wishlist.'}
+            {isVendor
+              ? 'Search cards, sets, and add items to inventory.'
+              : isGuest
+              ? 'Search cards and discover where to find them at upcoming shows.'
+              : 'Search cards, sets, and add items to your wishlist.'}
           </p>
         </div>
+
+        {isGuest && (
+          <section className="mb-6 overflow-hidden rounded-3xl border border-yellow-800/60 bg-gradient-to-br from-yellow-400/15 via-[#111] to-black p-5">
+            <div className="mb-4 flex items-center justify-between gap-3">
+              <span className="rounded-full border border-yellow-800/70 bg-yellow-950/40 px-3 py-1 text-[11px] font-bold uppercase tracking-[0.14em] text-yellow-300">
+                Browsing as Guest
+              </span>
+
+              <button
+                type="button"
+                onClick={() => navigate('/?mode=signup&returnTo=/search')}
+                className="text-xs font-bold text-white underline decoration-gray-700 underline-offset-4"
+              >
+                Sign Up
+              </button>
+            </div>
+
+            <h2 className="max-w-[330px] text-3xl font-black leading-[1.08] text-white">
+              Find the card. Find the show. Find the vendor.
+            </h2>
+
+            <p className="mt-3 max-w-[340px] text-sm leading-6 text-gray-400">
+              Search cards, see which upcoming shows have them, and find the vendor booth before you arrive.
+            </p>
+
+            <div className="mt-5 grid grid-cols-2 gap-2">
+              <button
+                type="button"
+                onClick={() => {
+                  document.querySelector('input[placeholder^="Search cards or sets"]')?.focus()
+                }}
+                className="rounded-xl bg-white p-3 text-sm font-black text-black"
+              >
+                Search Cards
+              </button>
+
+              <button
+                type="button"
+                onClick={() => navigate('/map')}
+                className="rounded-xl border border-[#333] bg-black p-3 text-sm font-bold text-white"
+              >
+                Explore Shows
+              </button>
+            </div>
+
+            <button
+              type="button"
+              onClick={() => setShowCardScanner(true)}
+              className="mt-3 flex w-full items-center justify-center gap-2 rounded-xl border border-yellow-900/70 bg-yellow-950/20 p-3 text-sm font-bold text-yellow-300"
+            >
+              <Camera size={17} />
+              Scan a Card Instantly
+            </button>
+
+            <div className="mt-5 grid grid-cols-3 gap-2 border-t border-white/10 pt-4 text-center">
+              <div>
+                <p className="text-xs font-bold text-white">Search</p>
+                <p className="mt-1 text-[10px] leading-4 text-gray-600">Find a card</p>
+              </div>
+              <div>
+                <p className="text-xs font-bold text-white">Locate</p>
+                <p className="mt-1 text-[10px] leading-4 text-gray-600">See the show</p>
+              </div>
+              <div>
+                <p className="text-xs font-bold text-white">Find</p>
+                <p className="mt-1 text-[10px] leading-4 text-gray-600">Go to the booth</p>
+              </div>
+            </div>
+
+            <div className="mt-4 rounded-2xl border border-blue-900/50 bg-blue-950/15 p-4">
+              <div className="flex items-start gap-3">
+                <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-blue-950/60 text-blue-300">
+                  <Sparkles size={17} />
+                </div>
+
+                <div className="min-w-0">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <p className="text-sm font-bold text-white">Card Notifications</p>
+                    <span className="rounded-full border border-blue-900/60 bg-blue-950/40 px-2 py-0.5 text-[9px] font-black uppercase tracking-wide text-blue-300">
+                      Coming Soon
+                    </span>
+                  </div>
+
+                  <p className="mt-1 text-xs leading-5 text-gray-400">
+                    Save the cards you&apos;re hunting and Vendly will alert you when a vendor brings a match to an upcoming show.
+                  </p>
+                </div>
+              </div>
+            </div>
+          </section>
+        )}
 
         <div className="mb-6">
           <div className="flex items-center rounded-2xl border border-[#222] bg-[#111] px-4">
@@ -2256,9 +2378,9 @@ function Search() {
                 {scanProcessingLabel}
               </p>
               <p className="mt-1 text-xs text-gray-500">
-                {scanProcessingLabel === 'Verifying PSA slab...'
-                  ? 'Checking PSA certification + matching PokéWallet'
-                  : 'Reading card + checking PokéWallet'}
+                {scanProcessingLabel === 'Reading Slab label...'
+                  ? 'Reading slab label + matching results'
+                  : 'Reading card + checking results'}
               </p>
             </div>
           </div>
@@ -3131,11 +3253,73 @@ function Search() {
         </div>
       )}
 
+      {showGuestPrompt && (
+        <div className="fixed inset-0 z-[130] flex items-center justify-center bg-black/85 p-5">
+          <div className="w-full max-w-sm rounded-3xl border border-[#2a2a2a] bg-[#111] p-5 shadow-2xl">
+            <div className="mb-4 flex items-start justify-between gap-4">
+              <div>
+                <p className="text-xs font-bold uppercase tracking-[0.16em] text-yellow-300">
+                  Free account
+                </p>
+                <h2 className="mt-2 text-2xl font-bold">Save it with Vendly</h2>
+              </div>
+
+              <button
+                type="button"
+                onClick={() => {
+                  setShowGuestPrompt(false)
+                  setSelectedCard(null)
+                  setSelectedFromScan(false)
+                }}
+                className="rounded-full border border-[#2a2a2a] bg-black p-2 text-gray-400"
+              >
+                <X size={18} />
+              </button>
+            </div>
+
+            {selectedCard && (
+              <div className="mb-4 rounded-2xl border border-[#222] bg-black p-3">
+                <p className="font-semibold text-white">{getCardName(selectedCard)}</p>
+                <p className="mt-1 text-sm text-gray-500">
+                  {getSetName(selectedCard)} #{getCardNumber(selectedCard)}
+                </p>
+              </div>
+            )}
+
+            <p className="text-sm leading-6 text-gray-400">
+              Guests can search and scan cards without an account. Create a free
+              account to add cards to your wishlist, save your collection, and keep
+              your finds between visits.
+            </p>
+
+            <button
+              type="button"
+              onClick={() => navigate('/?mode=signup&returnTo=/search')}
+              className="mt-5 w-full rounded-xl bg-white p-4 font-bold text-black"
+            >
+              Create Free Account
+            </button>
+
+            <button
+              type="button"
+              onClick={() => {
+                setShowGuestPrompt(false)
+                setSelectedCard(null)
+                setSelectedFromScan(false)
+              }}
+              className="mt-3 w-full rounded-xl border border-[#2a2a2a] bg-black p-4 text-sm font-semibold text-gray-300"
+            >
+              Keep Browsing
+            </button>
+          </div>
+        </div>
+      )}
+
       <CardScanner
         open={showCardScanner}
         onClose={() => setShowCardScanner(false)}
         onConfirm={handleScanPhoto}
-        onPsaCert={handlePsaCertScan}
+        onSlabConfirm={handleSlabLabelScan}
       />
 
       <Navbar />

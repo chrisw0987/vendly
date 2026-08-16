@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { useLocation } from 'react-router-dom'
+import { useLocation, useNavigate } from 'react-router-dom'
 import Navbar from '../components/Navbar'
 import {
   CalendarDays,
@@ -18,10 +18,13 @@ import { supabase } from '../lib/supabase'
 
 function Map() {
   const location = useLocation()
+  const navigate = useNavigate()
   const searchSectionRef = useRef(null)
   const floorplanSectionRef = useRef(null)
 
-  const [activeTab, setActiveTab] = useState('saved')
+  const [activeTab, setActiveTab] = useState('explore')
+  const [currentUser, setCurrentUser] = useState(null)
+  const [showGuestPrompt, setShowGuestPrompt] = useState(false)
   const [savedEvents, setSavedEvents] = useState([])
   const [savedEventIds, setSavedEventIds] = useState([])
   const [events, setEvents] = useState([])
@@ -52,10 +55,22 @@ function Map() {
   const [vendorInventorySort, setVendorInventorySort] = useState('name-asc')
 
   useEffect(() => {
-    fetchEvents()
-    fetchSavedEvents()
-    useUserLocation()
+    initializeMap()
   }, [])
+
+  async function initializeMap() {
+    const user = await getUser()
+    setCurrentUser(user || null)
+
+    if (user) {
+      fetchSavedEvents()
+    } else {
+      setActiveTab('explore')
+    }
+
+    fetchEvents()
+    useUserLocation()
+  }
 
   useEffect(() => {
     const params = new URLSearchParams(location.search)
@@ -189,7 +204,7 @@ function Map() {
     const user = await getUser()
 
     if (!user) {
-      setMessage('You must be logged in to save events.')
+      setShowGuestPrompt(true)
       return
     }
 
@@ -363,12 +378,6 @@ function Map() {
       return
     }
 
-    const { data: vendor } = await supabase
-      .from('users')
-      .select('display_name, username')
-      .eq('id', booth.vendor_id)
-      .maybeSingle()
-
     const { data: assignedRows, error: assignedError } = await supabase
       .from('show_inventory')
       .select('id, inventory_item_id')
@@ -412,11 +421,7 @@ function Map() {
       loading: false,
       vendorId: booth.vendor_id,
       boothNumber: booth.booth_number,
-      vendorName:
-        booth.display_name ||
-        vendor?.username ||
-        vendor?.display_name ||
-        'Vendor',
+      vendorName: booth.display_name || 'Vendor',
       inventory: assignedError || inventoryError ? [] : assignedInventory,
       inventoryError: assignedError?.message || inventoryError?.message || '',
     })
@@ -772,14 +777,84 @@ function Map() {
   return (
     <div className="min-h-screen bg-black text-white pb-24">
       <main className="mx-auto max-w-[430px] px-5 pt-8">
+        {!currentUser && (
+          <section className="mb-6 rounded-3xl border border-yellow-800/60 bg-gradient-to-br from-yellow-400/15 via-[#111] to-black p-5">
+            <div className="mb-4 flex items-center justify-between gap-3">
+              <span className="rounded-full border border-yellow-800/70 bg-yellow-950/40 px-3 py-1 text-[11px] font-bold uppercase tracking-[0.14em] text-yellow-300">
+                Browsing as Guest
+              </span>
+
+              <button
+                type="button"
+                onClick={() => navigate('/?mode=signup&returnTo=/map')}
+                className="text-xs font-bold text-white underline decoration-gray-700 underline-offset-4"
+              >
+                Sign Up
+              </button>
+            </div>
+
+            <h2 className="text-3xl font-black leading-[1.08] text-white">
+              Hunting for a card? See who&apos;s bringing it.
+            </h2>
+
+            <p className="mt-3 text-sm leading-6 text-gray-400">
+              Open an upcoming show, search its vendor inventory, and find the booth carrying the card before you arrive.
+            </p>
+
+            <div className="mt-5 grid grid-cols-2 gap-2">
+              <button
+                type="button"
+                onClick={() => navigate('/search')}
+                className="rounded-xl bg-white p-3 text-sm font-black text-black"
+              >
+                Search Cards
+              </button>
+
+              <button
+                type="button"
+                onClick={() => {
+                  setActiveTab('explore')
+                  requestAnimationFrame(() => {
+                    document.querySelector('input[placeholder="Search shows"]')?.focus()
+                  })
+                }}
+                className="rounded-xl border border-[#333] bg-black p-3 text-sm font-bold text-white"
+              >
+                Browse Shows
+              </button>
+            </div>
+
+            <div className="mt-5 grid grid-cols-3 gap-2 border-t border-white/10 pt-4 text-center">
+              <div>
+                <p className="text-xs font-bold text-white">1. Choose</p>
+                <p className="mt-1 text-[10px] leading-4 text-gray-600">Open a show</p>
+              </div>
+              <div>
+                <p className="text-xs font-bold text-white">2. Search</p>
+                <p className="mt-1 text-[10px] leading-4 text-gray-600">Find your card</p>
+              </div>
+              <div>
+                <p className="text-xs font-bold text-white">3. Visit</p>
+                <p className="mt-1 text-[10px] leading-4 text-gray-600">Go to the booth</p>
+              </div>
+            </div>
+          </section>
+        )}
+
         <div className="mb-6 flex justify-center rounded-2xl border border-[#222] bg-[#111] p-1">
           <button
-            onClick={() => setActiveTab('saved')}
+            onClick={() => {
+              if (!currentUser) {
+                setShowGuestPrompt(true)
+                return
+              }
+              setActiveTab('saved')
+            }}
             className={`w-1/2 rounded-xl py-3 text-sm font-semibold ${
               activeTab === 'saved' ? 'bg-white text-black' : 'text-gray-400'
             }`}
           >
-            My Saved Events
+            {currentUser ? 'My Saved Events' : 'Saved Events'}
           </button>
 
           <button
@@ -827,6 +902,8 @@ function Map() {
             <p className="mt-1 text-sm text-gray-400">
               {activeTab === 'saved'
                 ? 'Events you saved, ordered by date.'
+                : !currentUser
+                ? 'Browse upcoming shows and check what vendors are bringing.'
                 : 'Find nearby card shows and events.'}
             </p>
           </div>
@@ -869,6 +946,14 @@ function Map() {
           <p className="mb-4 rounded-xl border border-[#222] bg-[#111] p-3 text-sm text-gray-300">
             {message}
           </p>
+        )}
+
+        {!currentUser && activeTab === 'explore' && !loadingEvents && events.length > 0 && (
+          <div className="mb-4 rounded-2xl border border-blue-900/50 bg-blue-950/15 p-3">
+            <p className="text-sm font-semibold text-blue-200">
+              Tip: tap More Info on a show, then use Search This Show to see matching vendor inventory and booth numbers.
+            </p>
+          </div>
         )}
 
         {loadingEvents && activeTab === 'explore' ? (
@@ -1431,6 +1516,50 @@ function Map() {
               </>
             )}
             </div>
+          </div>
+        </div>
+      )}
+
+      {showGuestPrompt && (
+        <div className="fixed inset-0 z-[120] flex items-center justify-center bg-black/85 p-5">
+          <div className="w-full max-w-sm rounded-3xl border border-[#2a2a2a] bg-[#111] p-5 shadow-2xl">
+            <div className="mb-4 flex items-start justify-between gap-4">
+              <div>
+                <p className="text-xs font-bold uppercase tracking-[0.16em] text-yellow-300">
+                  Free account
+                </p>
+                <h2 className="mt-2 text-2xl font-bold">Save your shows</h2>
+              </div>
+
+              <button
+                type="button"
+                onClick={() => setShowGuestPrompt(false)}
+                className="rounded-full border border-[#2a2a2a] bg-black p-2 text-gray-400"
+              >
+                <X size={18} />
+              </button>
+            </div>
+
+            <p className="text-sm leading-6 text-gray-400">
+              Guests can explore shows, floorplans, vendors, and public inventory.
+              Create a free Vendly account to save shows and keep them on your dashboard.
+            </p>
+
+            <button
+              type="button"
+              onClick={() => navigate('/?mode=signup&returnTo=/map')}
+              className="mt-5 w-full rounded-xl bg-white p-4 font-bold text-black"
+            >
+              Create Free Account
+            </button>
+
+            <button
+              type="button"
+              onClick={() => setShowGuestPrompt(false)}
+              className="mt-3 w-full rounded-xl border border-[#2a2a2a] bg-black p-4 text-sm font-semibold text-gray-300"
+            >
+              Keep Exploring
+            </button>
           </div>
         </div>
       )}

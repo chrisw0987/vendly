@@ -1,11 +1,21 @@
 import { useMemo, useState } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useLocation, useNavigate } from 'react-router-dom'
 import { supabase } from '../lib/supabase'
 
 function Login() {
   const navigate = useNavigate()
+  const location = useLocation()
 
-  const [mode, setMode] = useState('login') // login, signup, forgot
+  const queryParams = useMemo(
+    () => new URLSearchParams(location.search),
+    [location.search]
+  )
+  const requestedMode = queryParams.get('mode')
+  const returnTo = queryParams.get('returnTo')
+
+  const [mode, setMode] = useState(
+    requestedMode === 'signup' ? 'signup' : 'login'
+  ) // login, signup, forgot
   const [loginIdentifier, setLoginIdentifier] = useState('')
   const [username, setUsername] = useState('')
   const [email, setEmail] = useState('')
@@ -70,21 +80,36 @@ function Login() {
       return cleanIdentifier.toLowerCase()
     }
 
-    const { data, error } = await supabase
-      .from('users')
-      .select('display_name')
-      .eq('username', cleanIdentifier)
-      .maybeSingle()
+    const { data, error } = await supabase.functions.invoke('username-lookup', {
+      body: {
+        username: cleanIdentifier,
+      },
+    })
 
     if (error) {
-      throw new Error(error.message)
+      let detail = ''
+
+      try {
+        if (error.context) {
+          detail = await error.context.clone().text()
+        }
+      } catch {
+        detail = ''
+      }
+
+      console.error('Username lookup failed:', {
+        error,
+        detail,
+      })
+
+      throw new Error('Unable to look up that username right now. Please try again.')
     }
 
-    if (!data?.display_name) {
+    if (!data?.found || !data?.email) {
       throw new Error("This user doesn't exist. Please sign up.")
     }
 
-    return data.display_name
+    return data.email
   }
 
   async function handleLogin() {
@@ -124,7 +149,7 @@ function Login() {
         return
       }
 
-      navigate('/dashboard')
+      navigate(returnTo?.startsWith('/') ? returnTo : '/dashboard')
     } catch (err) {
       setMessage(err.message)
       setLoading(false)
@@ -298,6 +323,28 @@ function Login() {
             >
               Create Account
             </button>
+
+            <div className="my-4 flex items-center gap-3">
+              <div className="h-px flex-1 bg-[#222]" />
+              <span className="text-xs font-semibold uppercase tracking-wide text-gray-600">
+                or
+              </span>
+              <div className="h-px flex-1 bg-[#222]" />
+            </div>
+
+            <button
+              type="button"
+              onClick={() => navigate('/search')}
+              disabled={loading}
+              className="w-full rounded-xl border border-yellow-900/60 bg-yellow-950/20 p-4 text-sm font-semibold text-yellow-300 disabled:opacity-60"
+            >
+              Explore Vendly as Guest
+            </button>
+
+            <p className="mt-3 text-center text-xs leading-5 text-gray-600">
+              Guests can search cards, scan cards, and explore shows. Create a free
+              account when you want to save cards or shows.
+            </p>
           </>
         ) : mode === 'forgot' ? (
           <>

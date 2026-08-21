@@ -1,14 +1,12 @@
 import { useEffect, useState } from 'react'
-import Navbar from '../components/Navbar'
-import { supabase } from '../lib/supabase'
+import { supabase } from '../../lib/supabase'
 import { Pencil, RotateCcw, Trash2, X } from 'lucide-react'
 
-function Sales() {
+function SellingTab({ userId, isVendor }) {
   const [sales, setSales] = useState([])
   const [loading, setLoading] = useState(true)
   const [message, setMessage] = useState('')
   const [editingSale, setEditingSale] = useState(null)
-  const [accountType, setAccountType] = useState('user')
   const [editForm, setEditForm] = useState({
     sale_type: 'cash',
     sale_quantity: 1,
@@ -19,50 +17,17 @@ function Sales() {
 
   useEffect(() => {
     fetchSales()
-  }, [])
-
-  async function getUser() {
-    const {
-      data: { user },
-    } = await supabase.auth.getUser()
-
-    return user
-  }
-
-  async function fetchAccountType(userId) {
-    const { data, error } = await supabase
-      .from('users')
-      .select('account_type')
-      .eq('id', userId)
-      .maybeSingle()
-
-    if (error) return 'user'
-
-    return data?.account_type || 'user'
-  }
+  }, [userId, isVendor])
 
   async function fetchSales() {
-    setLoading(true)
-    setMessage('')
-
-    const user = await getUser()
-
-    if (!user) {
-      setMessage('You must be logged in.')
-      setLoading(false)
-      return
-    }
-
-    const type = await fetchAccountType(user.id)
-    setAccountType(type)
-
-    const userIsVendor = type === 'vendor' || type === 'admin'
-
-    if (!userIsVendor) {
+    if (!userId || !isVendor) {
       setSales([])
       setLoading(false)
       return
     }
+
+    setLoading(true)
+    setMessage('')
 
     const { data, error } = await supabase
       .from('inventory_sales')
@@ -78,7 +43,7 @@ function Sales() {
           is_sold
         )
       `)
-      .eq('vendor_id', user.id)
+      .eq('vendor_id', userId)
       .order('sold_at', { ascending: false })
 
     if (error) {
@@ -181,7 +146,9 @@ function Sales() {
     const item = sale.inventory_items
 
     if (!item?.id) {
-      setMessage('This sale is connected to a deleted inventory item and cannot be restored.')
+      setMessage(
+        'This sale is connected to a deleted inventory item and cannot be restored.'
+      )
       return
     }
 
@@ -191,7 +158,8 @@ function Sales() {
 
     if (!confirmed) return
 
-    const restoredQuantity = Number(item.quantity || 0) + Number(sale.sale_quantity || 1)
+    const restoredQuantity =
+      Number(item.quantity || 0) + Number(sale.sale_quantity || 1)
 
     const { error: itemError } = await supabase
       .from('inventory_items')
@@ -256,186 +224,168 @@ function Sales() {
     0
   )
 
-
-  const isVendor = accountType === 'vendor' || accountType === 'admin'
-
-  if (!loading && !isVendor) {
+  if (!isVendor) {
     return (
-      <div className="min-h-screen bg-black text-white pb-24">
-        <main className="mx-auto max-w-[430px] px-5 pt-8">
-          <div className="rounded-2xl border border-[#222] bg-[#111] p-6 text-center">
-            <h1 className="text-2xl font-bold">Sales are vendor-only</h1>
-            <p className="mt-2 text-sm text-gray-400">
-              Regular users can track their collection from Inventory. Sales history unlocks after vendor approval.
-            </p>
-          </div>
-        </main>
-
-        <Navbar />
+      <div className="rounded-2xl border border-[#222] bg-[#111] p-6 text-center">
+        <h2 className="text-xl font-bold">Selling is vendor-only</h2>
+        <p className="mt-2 text-sm leading-6 text-gray-400">
+          Apply for a vendor account to track sales, revenue, and profit here.
+        </p>
       </div>
     )
   }
 
   return (
-    <div className="min-h-screen bg-black text-white pb-24">
-      <main className="mx-auto max-w-[430px] px-5 pt-8">
-        <div className="mb-6">
-          <h1 className="text-3xl font-bold">Sales History</h1>
+    <>
+      <div className="mb-5 grid grid-cols-3 gap-2">
+        <div className="rounded-2xl border border-[#222] bg-[#111] p-3">
+          <p className="text-xs text-gray-500">Sold Qty</p>
+          <p className="mt-1 text-lg font-bold">{totalSoldQty}</p>
+        </div>
+
+        <div className="rounded-2xl border border-[#222] bg-[#111] p-3">
+          <p className="text-xs text-gray-500">Sales</p>
+          <p className="mt-1 text-lg font-bold text-yellow-300">
+            {formatMoney(totalSalesValue)}
+          </p>
+        </div>
+
+        <div className="rounded-2xl border border-[#222] bg-[#111] p-3">
+          <p className="text-xs text-gray-500">Profit</p>
+          <p
+            className={`mt-1 text-lg font-bold ${
+              totalProfit >= 0 ? 'text-green-300' : 'text-red-300'
+            }`}
+          >
+            {formatMoney(totalProfit)}
+          </p>
+        </div>
+      </div>
+
+      {message && (
+        <p className="mb-4 rounded-xl border border-[#222] bg-[#111] p-3 text-sm text-gray-300">
+          {message}
+        </p>
+      )}
+
+      {loading && <p className="text-sm text-gray-400">Loading sales...</p>}
+
+      {!loading && sales.length === 0 && (
+        <div className="rounded-2xl border border-[#222] bg-[#111] p-6 text-center">
+          <h2 className="text-lg font-semibold">No sales recorded yet</h2>
           <p className="mt-1 text-sm text-gray-400">
-            Review, edit, or undo recorded sales.
+            When you sell inventory, sales will appear here.
           </p>
         </div>
+      )}
 
-        <div className="mb-5 grid grid-cols-3 gap-2">
-          <div className="rounded-2xl border border-[#222] bg-[#111] p-3">
-            <p className="text-xs text-gray-500">Sold Qty</p>
-            <p className="mt-1 text-lg font-bold">{totalSoldQty}</p>
-          </div>
+      {!loading && sales.length > 0 && (
+        <div className="space-y-3">
+          {sales.map((sale) => {
+            const item = sale.inventory_items
 
-          <div className="rounded-2xl border border-[#222] bg-[#111] p-3">
-            <p className="text-xs text-gray-500">Sales</p>
-            <p className="mt-1 text-lg font-bold text-yellow-300">
-              {formatMoney(totalSalesValue)}
-            </p>
-          </div>
+            return (
+              <div
+                key={sale.id}
+                className="rounded-2xl border border-[#222] bg-[#111] p-4"
+              >
+                <div className="flex gap-4">
+                  {item?.image_url ? (
+                    <img
+                      src={item.image_url}
+                      alt={item.card_name}
+                      className="h-28 w-20 shrink-0 rounded-xl bg-black object-contain"
+                    />
+                  ) : (
+                    <div className="h-28 w-20 shrink-0 rounded-xl bg-[#1a1a1a]" />
+                  )}
 
-          <div className="rounded-2xl border border-[#222] bg-[#111] p-3">
-            <p className="text-xs text-gray-500">Profit</p>
-            <p
-              className={`mt-1 text-lg font-bold ${
-                totalProfit >= 0 ? 'text-green-300' : 'text-red-300'
-              }`}
-            >
-              {formatMoney(totalProfit)}
-            </p>
-          </div>
-        </div>
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="min-w-0">
+                        <p className="font-semibold">
+                          {item?.card_name || 'Deleted item'}
+                        </p>
+                        <p className="mt-1 text-sm text-gray-400">
+                          {item?.set_name || 'Set N/A'}
+                          {item?.card_number ? ` #${item.card_number}` : ''}
+                        </p>
+                      </div>
 
-        {message && (
-          <p className="mb-4 rounded-xl border border-[#222] bg-[#111] p-3 text-sm text-gray-300">
-            {message}
-          </p>
-        )}
+                      <span className="rounded-full border border-[#333] bg-black px-2 py-1 text-xs text-gray-300">
+                        x{sale.sale_quantity || 1}
+                      </span>
+                    </div>
 
-        {loading && <p className="text-sm text-gray-400">Loading sales...</p>}
+                    <p className="mt-2 text-sm text-gray-400">
+                      {formatSaleType(sale.sale_type)} · {formatDate(sale.sold_at)}
+                    </p>
 
-        {!loading && sales.length === 0 && (
-          <div className="rounded-2xl border border-[#222] bg-[#111] p-6 text-center">
-            <h2 className="text-lg font-semibold">No sales recorded yet</h2>
-            <p className="mt-1 text-sm text-gray-400">
-              When you sell inventory, sales will appear here.
-            </p>
-          </div>
-        )}
+                    <div className="mt-3 grid grid-cols-2 gap-2 text-sm">
+                      <div className="rounded-xl bg-black p-3">
+                        <p className="text-gray-500">Total</p>
+                        <p className="font-semibold text-yellow-300">
+                          {formatMoney(sale.total_sale_value)}
+                        </p>
+                      </div>
 
-        {!loading && sales.length > 0 && (
-          <div className="space-y-3">
-            {sales.map((sale) => {
-              const item = sale.inventory_items
+                      <div className="rounded-xl bg-black p-3">
+                        <p className="text-gray-500">Profit</p>
+                        <p
+                          className={`font-semibold ${
+                            Number(sale.profit || 0) >= 0
+                              ? 'text-green-300'
+                              : 'text-red-300'
+                          }`}
+                        >
+                          {formatMoney(sale.profit)}
+                        </p>
+                      </div>
+                    </div>
 
-              return (
-                <div
-                  key={sale.id}
-                  className="rounded-2xl border border-[#222] bg-[#111] p-4"
-                >
-                  <div className="flex gap-4">
-                    {item?.image_url ? (
-                      <img
-                        src={item.image_url}
-                        alt={item.card_name}
-                        className="h-28 w-20 shrink-0 rounded-xl bg-black object-contain"
-                      />
-                    ) : (
-                      <div className="h-28 w-20 shrink-0 rounded-xl bg-[#1a1a1a]" />
+                    <p className="mt-2 text-xs text-gray-500">
+                      Cash: {formatMoney(sale.cash_received)} · Trade:{' '}
+                      {formatMoney(sale.trade_value)}
+                    </p>
+
+                    {sale.notes && (
+                      <p className="mt-2 rounded-xl bg-black p-3 text-sm text-gray-300">
+                        {sale.notes}
+                      </p>
                     )}
 
-                    <div className="min-w-0 flex-1">
-                      <div className="flex items-start justify-between gap-2">
-                        <div className="min-w-0">
-                          <p className="font-semibold">
-                            {item?.card_name || 'Deleted item'}
-                          </p>
-                          <p className="mt-1 text-sm text-gray-400">
-                            {item?.set_name || 'Set N/A'}
-                            {item?.card_number ? ` #${item.card_number}` : ''}
-                          </p>
-                        </div>
+                    <div className="mt-3 grid grid-cols-3 gap-2">
+                      <button
+                        onClick={() => openEditSale(sale)}
+                        className="flex items-center justify-center gap-1 rounded-xl border border-[#222] bg-black p-2 text-xs font-semibold text-gray-300"
+                      >
+                        <Pencil size={14} />
+                        Edit
+                      </button>
 
-                        <span className="rounded-full border border-[#333] bg-black px-2 py-1 text-xs text-gray-300">
-                          x{sale.sale_quantity || 1}
-                        </span>
-                      </div>
+                      <button
+                        onClick={() => undoSale(sale)}
+                        className="flex items-center justify-center gap-1 rounded-xl border border-green-900 bg-green-950/30 p-2 text-xs font-semibold text-green-300"
+                      >
+                        <RotateCcw size={14} />
+                        Undo
+                      </button>
 
-                      <p className="mt-2 text-sm text-gray-400">
-                        {formatSaleType(sale.sale_type)} · {formatDate(sale.sold_at)}
-                      </p>
-
-                      <div className="mt-3 grid grid-cols-2 gap-2 text-sm">
-                        <div className="rounded-xl bg-black p-3">
-                          <p className="text-gray-500">Total</p>
-                          <p className="font-semibold text-yellow-300">
-                            {formatMoney(sale.total_sale_value)}
-                          </p>
-                        </div>
-
-                        <div className="rounded-xl bg-black p-3">
-                          <p className="text-gray-500">Profit</p>
-                          <p
-                            className={`font-semibold ${
-                              Number(sale.profit || 0) >= 0
-                                ? 'text-green-300'
-                                : 'text-red-300'
-                            }`}
-                          >
-                            {formatMoney(sale.profit)}
-                          </p>
-                        </div>
-                      </div>
-
-                      <p className="mt-2 text-xs text-gray-500">
-                        Cash: {formatMoney(sale.cash_received)} · Trade:{' '}
-                        {formatMoney(sale.trade_value)}
-                      </p>
-
-                      {sale.notes && (
-                        <p className="mt-2 rounded-xl bg-black p-3 text-sm text-gray-300">
-                          {sale.notes}
-                        </p>
-                      )}
-
-                      <div className="mt-3 grid grid-cols-3 gap-2">
-                        <button
-                          onClick={() => openEditSale(sale)}
-                          className="flex items-center justify-center gap-1 rounded-xl border border-[#222] bg-black p-2 text-xs font-semibold text-gray-300"
-                        >
-                          <Pencil size={14} />
-                          Edit
-                        </button>
-
-                        <button
-                          onClick={() => undoSale(sale)}
-                          className="flex items-center justify-center gap-1 rounded-xl border border-green-900 bg-green-950/30 p-2 text-xs font-semibold text-green-300"
-                        >
-                          <RotateCcw size={14} />
-                          Undo
-                        </button>
-
-                        <button
-                          onClick={() => deleteSaleOnly(sale)}
-                          className="flex items-center justify-center gap-1 rounded-xl border border-red-900 bg-red-950/30 p-2 text-xs font-semibold text-red-300"
-                        >
-                          <Trash2 size={14} />
-                          Delete
-                        </button>
-                      </div>
+                      <button
+                        onClick={() => deleteSaleOnly(sale)}
+                        className="flex items-center justify-center gap-1 rounded-xl border border-red-900 bg-red-950/30 p-2 text-xs font-semibold text-red-300"
+                      >
+                        <Trash2 size={14} />
+                        Delete
+                      </button>
                     </div>
                   </div>
                 </div>
-              )
-            })}
-          </div>
-        )}
-      </main>
+              </div>
+            )
+          })}
+        </div>
+      )}
 
       {editingSale && (
         <div className="fixed inset-0 z-50 overflow-y-auto bg-black/80 p-5">
@@ -461,18 +411,25 @@ function Sales() {
               <option value="other">Other</option>
             </select>
 
-            <label className="mb-2 block text-sm text-gray-400">Quantity Sold</label>
+            <label className="mb-2 block text-sm text-gray-400">
+              Quantity Sold
+            </label>
             <input
               type="number"
               min="1"
               value={editForm.sale_quantity}
               onChange={(e) =>
-                setEditForm({ ...editForm, sale_quantity: Number(e.target.value) })
+                setEditForm({
+                  ...editForm,
+                  sale_quantity: Number(e.target.value),
+                })
               }
               className="mb-4 w-full rounded-xl border border-[#222] bg-black p-3 text-white outline-none"
             />
 
-            <label className="mb-2 block text-sm text-gray-400">Cash Received</label>
+            <label className="mb-2 block text-sm text-gray-400">
+              Cash Received
+            </label>
             <input
               type="number"
               step="0.01"
@@ -497,17 +454,27 @@ function Sales() {
             <label className="mb-2 block text-sm text-gray-400">Notes</label>
             <textarea
               value={editForm.notes}
-              onChange={(e) => setEditForm({ ...editForm, notes: e.target.value })}
+              onChange={(e) =>
+                setEditForm({ ...editForm, notes: e.target.value })
+              }
               className="mb-4 h-24 w-full rounded-xl border border-[#222] bg-black p-3 text-white outline-none"
             />
 
             <div className="mb-5 rounded-xl border border-[#222] bg-black p-4">
               <p className="text-sm text-gray-400">Updated Summary</p>
               <p className="mt-2 font-bold text-yellow-300">
-                Total: {formatMoney(Number(editForm.cash_received || 0) + Number(editForm.trade_value || 0))}
+                Total:{' '}
+                {formatMoney(
+                  Number(editForm.cash_received || 0) +
+                    Number(editForm.trade_value || 0)
+                )}
               </p>
               <p className="mt-1 text-sm text-gray-400">
-                Cost: {formatMoney(Number(editingSale.purchase_price_snapshot || 0) * Number(editForm.sale_quantity || 1))}
+                Cost:{' '}
+                {formatMoney(
+                  Number(editingSale.purchase_price_snapshot || 0) *
+                    Number(editForm.sale_quantity || 1)
+                )}
               </p>
               <p
                 className={`mt-1 text-sm font-semibold ${
@@ -520,7 +487,8 @@ function Sales() {
                     : 'text-red-300'
                 }`}
               >
-                Profit: {formatMoney(
+                Profit:{' '}
+                {formatMoney(
                   Number(editForm.cash_received || 0) +
                     Number(editForm.trade_value || 0) -
                     Number(editingSale.purchase_price_snapshot || 0) *
@@ -538,10 +506,8 @@ function Sales() {
           </div>
         </div>
       )}
-
-      <Navbar />
-    </div>
+    </>
   )
 }
 
-export default Sales
+export default SellingTab

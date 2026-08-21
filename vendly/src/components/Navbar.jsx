@@ -51,7 +51,7 @@ function Navbar() {
     { label: 'Search', path: '/search', icon: Search },
     { label: 'Join Shows', path: '/shows', icon: CalendarDays },
     { label: 'Map', path: '/map', icon: Map },
-    { label: 'Sales', path: '/sales', icon: User },
+    { label: 'Activity', path: '/activity', icon: User },
   ]
 
   const guestNavItems = [

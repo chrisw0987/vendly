@@ -7,11 +7,12 @@ import Search from './pages/Search'
 import Inventory from './pages/Inventory'
 import Map from './pages/Map'
 import Shows from './pages/Shows'
-import Sales from './pages/Sales'
+import Activity from './pages/Activity'
 import Admin from './pages/Admin'
 import ImportInventory from './pages/ImportInventory'
 import { supabase } from './lib/supabase'
 import './index.css'
+import Notifications from './pages/Notifications'
 
 function ProtectedRoute({ children }) {
   const [checkingAuth, setCheckingAuth] = useState(true)
@@ -107,10 +108,10 @@ function App() {
           }
         />
         <Route
-          path="/sales"
+          path="/activity"
           element={
             <ProtectedRoute>
-              <Sales />
+              <Activity />
             </ProtectedRoute>
           }
         />
@@ -119,6 +120,14 @@ function App() {
           element={
             <ProtectedRoute>
               <Admin />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/notifications"
+          element={
+            <ProtectedRoute>
+              <Notifications />
             </ProtectedRoute>
           }
         />

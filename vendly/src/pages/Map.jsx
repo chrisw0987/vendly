@@ -12,6 +12,7 @@ import {
   X,
   ArrowLeft,
   Search as SearchIcon,
+  CheckCircle2,
 } from 'lucide-react'
 import { supabase } from '../lib/supabase'
 
@@ -20,6 +21,7 @@ function Map() {
   const location = useLocation()
   const navigate = useNavigate()
   const searchSectionRef = useRef(null)
+  const huntSectionRef = useRef(null)
   const floorplanSectionRef = useRef(null)
 
   const [activeTab, setActiveTab] = useState('explore')
@@ -49,6 +51,12 @@ function Map() {
   const [showInventoryHasSearched, setShowInventoryHasSearched] = useState(false)
   const [showInventoryType, setShowInventoryType] = useState('all')
   const [showInventorySort, setShowInventorySort] = useState('price-low')
+  const [showHuntItems, setShowHuntItems] = useState([])
+  const [loadingShowHunt, setLoadingShowHunt] = useState(false)
+  const [showAllHuntItems, setShowAllHuntItems] = useState(false)
+  const [huntStatuses, setHuntStatuses] = useState({})
+  const [updatingHuntStatusId, setUpdatingHuntStatusId] = useState(null)
+  const [showHuntVisible, setShowHuntVisible] = useState(false)
 
   const [vendorInventorySearch, setVendorInventorySearch] = useState('')
   const [vendorInventoryType, setVendorInventoryType] = useState('all')
@@ -61,6 +69,20 @@ function Map() {
   async function initializeMap() {
     const user = await getUser()
     setCurrentUser(user || null)
+
+    const params = new URLSearchParams(location.search)
+    const isProtectedHuntLink =
+      params.get('view') === 'hunt' && Boolean(params.get('event'))
+
+    if (!user && isProtectedHuntLink) {
+      const returnTo = `${location.pathname}${location.search}`
+
+      navigate(
+        `/?returnTo=${encodeURIComponent(returnTo)}`,
+        { replace: true }
+      )
+      return
+    }
 
     if (user) {
       fetchSavedEvents()
@@ -97,27 +119,48 @@ function Map() {
   }, [selectedEvent])
 
   useEffect(() => {
-    if (!selectedEvent) return
+    if (!selectedEvent) return undefined
 
     const params = new URLSearchParams(location.search)
     const view = params.get('view')
+    let cancelled = false
+    let timeout
 
-    const timeout = setTimeout(() => {
-      if (view === 'floorplan') {
-        floorplanSectionRef.current?.scrollIntoView({
-          behavior: 'smooth',
-          block: 'start',
-        })
-      } else if (view === 'search') {
-        searchSectionRef.current?.scrollIntoView({
-          behavior: 'smooth',
-          block: 'start',
-        })
+    async function loadSelectedEventView() {
+      if (currentUser) {
+        await fetchShowHunt(selectedEvent.id)
+      } else {
+        setShowHuntItems([])
+        setHuntStatuses({})
+        setShowHuntVisible(false)
       }
-    }, 200)
 
-    return () => clearTimeout(timeout)
-  }, [selectedEvent, location.search])
+      if (cancelled) return
+
+      timeout = setTimeout(() => {
+        const targetRef =
+          view === 'hunt'
+            ? huntSectionRef
+            : view === 'floorplan'
+            ? floorplanSectionRef
+            : view === 'search'
+            ? searchSectionRef
+            : null
+
+        targetRef?.current?.scrollIntoView({
+          behavior: 'smooth',
+          block: 'start',
+        })
+      }, view === 'hunt' ? 350 : 200)
+    }
+
+    loadSelectedEventView()
+
+    return () => {
+      cancelled = true
+      if (timeout) clearTimeout(timeout)
+    }
+  }, [selectedEvent, location.search, currentUser])
 
   async function getUser() {
     const {
@@ -428,6 +471,158 @@ function Map() {
   }
 
 
+  async function fetchShowHunt(eventId) {
+    if (!currentUser || !eventId) {
+      setShowHuntItems([])
+      setHuntStatuses({})
+      setShowHuntVisible(false)
+      return
+    }
+
+    setShowAllHuntItems(false)
+    setShowHuntVisible(false)
+    setLoadingShowHunt(true)
+
+    const { error: syncError } = await supabase.rpc('sync_user_show_hunt', {
+      p_event_id: eventId,
+    })
+
+    if (syncError) {
+      console.error('Show hunt sync failed:', syncError)
+      setShowHuntItems([])
+      setHuntStatuses({})
+      setShowHuntVisible(false)
+      setLoadingShowHunt(false)
+      return
+    }
+
+    const { data: huntRows, error: huntError } = await supabase
+      .from('show_hunt_entries')
+      .select(`
+        id,
+        event_id,
+        wishlist_item_id,
+        inventory_item_id,
+        vendor_id,
+        card_id,
+        card_name,
+        set_name,
+        card_number,
+        rarity,
+        image_url,
+        item_type,
+        condition,
+        grade_company,
+        grade,
+        listing_price,
+        market_price,
+        quantity,
+        vendor_name,
+        booth_number,
+        status,
+        listing_available,
+        unavailable_reason,
+        finalized_at,
+        created_at,
+        updated_at
+      `)
+      .eq('user_id', currentUser.id)
+      .eq('event_id', eventId)
+      .is('finalized_at', null)
+      .order('booth_number', { ascending: true })
+      .order('created_at', { ascending: true })
+
+    if (huntError) {
+      console.error('Show hunt load failed:', huntError)
+      setShowHuntItems([])
+      setHuntStatuses({})
+      setShowHuntVisible(false)
+      setLoadingShowHunt(false)
+      return
+    }
+
+    const hydrated = (huntRows || []).map((row) => ({
+      id: row.id,
+      wishlist_item_id: row.wishlist_item_id,
+      inventory_item_id: row.inventory_item_id,
+      vendor_id: row.vendor_id,
+      vendorName: row.vendor_name || 'Vendor',
+      boothNumber: row.booth_number || '',
+      status: row.status || 'hunting',
+      listingAvailable: row.listing_available !== false,
+      unavailableReason: row.unavailable_reason || '',
+      item: {
+        id: row.inventory_item_id,
+        card_id: row.card_id,
+        card_name: row.card_name,
+        set_name: row.set_name,
+        card_number: row.card_number,
+        rarity: row.rarity,
+        image_url: row.image_url,
+        listing_price: row.listing_price,
+        market_price: row.market_price,
+        quantity: row.quantity,
+        condition: row.condition,
+        item_type: row.item_type,
+        grade_company: row.grade_company,
+        grade: row.grade,
+        is_public: row.listing_available !== false,
+        is_sold: false,
+      },
+    }))
+
+    setShowHuntItems(hydrated)
+    setShowHuntVisible(hydrated.length > 0)
+    setHuntStatuses(
+      Object.fromEntries(
+        hydrated.map((row) => [
+          row.inventory_item_id || row.id,
+          row.status || 'hunting',
+        ])
+      )
+    )
+    setLoadingShowHunt(false)
+  }
+
+  async function updateHuntStatus(match, nextStatus) {
+    if (!currentUser || !selectedEvent?.id || !match?.id) return
+
+    const statusKey = match.inventory_item_id || match.id
+    setUpdatingHuntStatusId(statusKey)
+
+    const currentStatus = huntStatuses[statusKey] || 'hunting'
+    const resolvedStatus =
+      currentStatus === nextStatus ? 'hunting' : nextStatus
+
+    const { error } = await supabase
+      .from('show_hunt_entries')
+      .update({
+        status: resolvedStatus,
+        updated_at: new Date().toISOString(),
+      })
+      .eq('id', match.id)
+      .eq('user_id', currentUser.id)
+
+    if (error) {
+      setMessage(error.message)
+      setUpdatingHuntStatusId(null)
+      return
+    }
+
+    setHuntStatuses((current) => ({
+      ...current,
+      [statusKey]: resolvedStatus,
+    }))
+
+    setShowHuntItems((current) =>
+      current.map((item) =>
+        item.id === match.id ? { ...item, status: resolvedStatus } : item
+      )
+    )
+
+    setUpdatingHuntStatusId(null)
+  }
+
   async function searchAssignedShowInventory() {
     const query = showInventorySearch.trim().toLowerCase()
 
@@ -716,6 +911,17 @@ function Map() {
       }
     })
   }, [showInventoryResults, showInventoryType, showInventorySort])
+
+  const huntStatusCounts = useMemo(() => {
+    return showHuntItems.reduce(
+      (counts, match) => {
+        const status = huntStatuses[match.inventory_item_id || match.id] || match.status || 'hunting'
+        counts[status] += 1
+        return counts
+      },
+      { hunting: 0, bought: 0, skipped: 0 }
+    )
+  }, [showHuntItems, huntStatuses])
 
   const visibleVendorInventory = useMemo(() => {
     const inventory = selectedVendorTable?.inventory || []
@@ -1088,6 +1294,222 @@ function Map() {
                     {formatTime(selectedEvent.starts_at)}
                   </p>
                 </div>
+
+                {currentUser && showHuntVisible && (
+                  <div
+                    ref={huntSectionRef}
+                    className="mb-5 scroll-mt-4 rounded-2xl border border-yellow-900/60 bg-yellow-950/10 p-4"
+                  >
+                    <div className="flex items-start justify-between gap-3">
+                      <div>
+                        <p className="text-xs font-black uppercase tracking-[0.14em] text-yellow-300">
+                          My Hunt
+                        </p>
+                        <h3 className="mt-1 text-xl font-black text-white">
+                          Your cards at this show
+                        </h3>
+                      </div>
+
+                      {showHuntItems.length > 0 && (
+                        <span className="rounded-full bg-yellow-300 px-2.5 py-1 text-xs font-black text-black">
+                          {showHuntItems.length}
+                        </span>
+                      )}
+                    </div>
+
+                    <p className="mt-2 text-xs leading-5 text-gray-400">
+                      Your active wishlist matches, ordered by booth. Mark cards as Bought or Skip them as you work through the show.
+                    </p>
+
+                    {showHuntItems.length > 0 && (
+                      <div className="mt-3 grid grid-cols-3 gap-2">
+                        <div className="rounded-xl border border-[#2a2a2a] bg-black p-2 text-center">
+                          <p className="text-base font-black text-white">
+                            {huntStatusCounts.hunting}
+                          </p>
+                          <p className="text-[10px] uppercase tracking-wide text-gray-600">
+                            Hunting
+                          </p>
+                        </div>
+                        <div className="rounded-xl border border-green-900/60 bg-green-950/15 p-2 text-center">
+                          <p className="text-base font-black text-green-300">
+                            {huntStatusCounts.bought}
+                          </p>
+                          <p className="text-[10px] uppercase tracking-wide text-gray-600">
+                            Bought
+                          </p>
+                        </div>
+                        <div className="rounded-xl border border-[#2a2a2a] bg-[#151515] p-2 text-center">
+                          <p className="text-base font-black text-gray-300">
+                            {huntStatusCounts.skipped}
+                          </p>
+                          <p className="text-[10px] uppercase tracking-wide text-gray-600">
+                            Skipped
+                          </p>
+                        </div>
+                      </div>
+                    )}
+
+                    {loadingShowHunt ? (
+                      <p className="mt-4 text-sm text-gray-500">
+                        Building your show hunt...
+                      </p>
+                    ) : showHuntItems.length === 0 ? (
+                      <div className="mt-4 rounded-xl border border-[#2a2a2a] bg-black p-4 text-center">
+                        <CheckCircle2 className="mx-auto text-gray-600" size={28} />
+                        <p className="mt-2 text-sm font-bold text-white">
+                          No active matches right now
+                        </p>
+                        <p className="mt-1 text-xs leading-5 text-gray-500">
+                          You can still search all public vendor inventory below.
+                        </p>
+                      </div>
+                    ) : (
+                      <div className="mt-4 space-y-2">
+                        {(showAllHuntItems
+                          ? showHuntItems
+                          : showHuntItems.slice(0, 3)
+                        ).map((match) => {
+                          const item = match.item
+                          const price = getItemPrice(item)
+                          const huntStatus =
+                            huntStatuses[match.inventory_item_id || match.id] || match.status || 'hunting'
+                          const updatingStatus =
+                            updatingHuntStatusId === (match.inventory_item_id || match.id)
+
+                          return (
+                            <div
+                              key={match.id}
+                              className={`w-full rounded-xl border p-3 text-left ${
+                                huntStatus === 'bought'
+                                  ? 'border-green-900/70 bg-green-950/10'
+                                  : huntStatus === 'skipped'
+                                  ? 'border-[#2a2a2a] bg-[#121212] opacity-70'
+                                  : 'border-[#2a2a2a] bg-black'
+                              }`}
+                            >
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  openSearchResultBooth({
+                                    id: match.id,
+                                    item,
+                                    vendorId: match.vendor_id,
+                                    vendorName: match.vendorName,
+                                    boothNumber: match.boothNumber,
+                                  })
+                                }
+                                className="w-full text-left"
+                              >
+                              <div className="flex gap-3">
+                                {item?.image_url ? (
+                                  <img
+                                    src={item.image_url}
+                                    alt={getItemName(item)}
+                                    className="h-20 w-14 shrink-0 rounded-lg object-contain"
+                                  />
+                                ) : (
+                                  <div className="h-20 w-14 shrink-0 rounded-lg bg-[#1a1a1a]" />
+                                )}
+
+                                <div className="min-w-0 flex-1">
+                                  <div className="flex items-start justify-between gap-2">
+                                    <div className="min-w-0">
+                                      <p className="truncate font-bold text-white">
+                                        {getItemName(item)}
+                                      </p>
+                                      <p className="mt-1 truncate text-xs text-gray-500">
+                                        {item?.set_name || 'Unknown set'}
+                                        {item?.card_number ? ` #${item.card_number}` : ''}
+                                      </p>
+                                    </div>
+
+                                    {price !== null && (
+                                      <p className="shrink-0 font-black text-yellow-300">
+                                        ${price.toFixed(2)}
+                                      </p>
+                                    )}
+                                  </div>
+
+                                  <div className="mt-3 flex items-center justify-between gap-3 border-t border-[#222] pt-2">
+                                    <p className="text-xs text-gray-400">
+                                      {match.vendorName}
+                                    </p>
+                                    <p className="text-sm font-black text-green-300">
+                                      {match.boothNumber
+                                        ? `Booth ${match.boothNumber}`
+                                        : 'Booth TBD'}
+                                    </p>
+                                  </div>
+
+                                  {!match.listingAvailable && (
+                                    <div className="mt-2 rounded-lg border border-orange-900/60 bg-orange-950/20 px-3 py-2 text-xs font-semibold text-orange-300">
+                                      Listing unavailable
+                                      {match.unavailableReason
+                                        ? ` · ${match.unavailableReason}`
+                                        : ''}
+                                    </div>
+                                  )}
+                                </div>
+                              </div>
+                              </button>
+
+                              <div className="mt-3 grid grid-cols-2 gap-2 border-t border-[#222] pt-3">
+                                <button
+                                  type="button"
+                                  disabled={updatingStatus}
+                                  onClick={() => updateHuntStatus(match, 'bought')}
+                                  className={`rounded-lg px-3 py-2 text-xs font-black transition disabled:opacity-50 ${
+                                    huntStatus === 'bought'
+                                      ? 'bg-green-300 text-black'
+                                      : 'border border-green-900/70 bg-green-950/20 text-green-300'
+                                  }`}
+                                >
+                                  {huntStatus === 'bought'
+                                    ? '✓ Bought'
+                                    : 'Bought'}
+                                </button>
+
+                                <button
+                                  type="button"
+                                  disabled={updatingStatus}
+                                  onClick={() => updateHuntStatus(match, 'skipped')}
+                                  className={`rounded-lg px-3 py-2 text-xs font-black transition disabled:opacity-50 ${
+                                    huntStatus === 'skipped'
+                                      ? 'bg-gray-300 text-black'
+                                      : 'border border-[#333] bg-[#171717] text-gray-300'
+                                  }`}
+                                >
+                                  {huntStatus === 'skipped'
+                                    ? 'Skipped'
+                                    : 'Skip'}
+                                </button>
+                              </div>
+                            </div>
+                          )
+                        })}
+
+                        {showHuntItems.length > 3 && (
+                          <button
+                            type="button"
+                            onClick={() =>
+                              setShowAllHuntItems((current) => !current)
+                            }
+                            className="w-full rounded-xl border border-[#2a2a2a] bg-[#111] p-3 text-sm font-bold text-gray-300 transition hover:border-[#444] hover:text-white"
+                          >
+                            {showAllHuntItems
+                              ? 'Show Less'
+                              : `Show ${showHuntItems.length - 3} More ${
+                                  showHuntItems.length - 3 === 1
+                                    ? 'Card'
+                                    : 'Cards'
+                                }`}
+                          </button>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                )}
 
                 <div
                   ref={searchSectionRef}

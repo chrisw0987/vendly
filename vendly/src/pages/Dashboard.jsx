@@ -16,9 +16,10 @@ import {
   Plus,
   ArrowRight,
   ShieldCheck,
-  Sparkles,
-  MapPin,
   Ticket,
+  Bell,
+  Target,
+  TrendingUp,
 } from 'lucide-react'
 
 function Dashboard() {
@@ -41,6 +42,9 @@ function Dashboard() {
   const [recentSales, setRecentSales] = useState([])
   const [wishlistMatches, setWishlistMatches] = useState([])
   const [showDayEvents, setShowDayEvents] = useState([])
+  const [unreadNotificationCount, setUnreadNotificationCount] = useState(0)
+  const [marketMovers, setMarketMovers] = useState([])
+  const [marketMoversLoading, setMarketMoversLoading] = useState(true)
 
   const isVendor = accountType === 'vendor' || accountType === 'admin'
   const isAdmin = accountType === 'admin'
@@ -69,6 +73,22 @@ function Dashboard() {
     const user = await getUserOrRedirect()
     if (!user) return
 
+    const { count: unreadCount, error: notificationCountError } = await supabase
+      .from('notifications')
+      .select('id', { count: 'exact', head: true })
+      .eq('user_id', user.id)
+      .eq('is_read', false)
+
+    if (notificationCountError) {
+      console.warn(
+        'Dashboard notification count failed:',
+        notificationCountError
+      )
+      setUnreadNotificationCount(0)
+    } else {
+      setUnreadNotificationCount(unreadCount || 0)
+    }
+
     const { data: profileData, error: profileError } = await supabase
       .from('users')
       .select('username, account_type')
@@ -86,6 +106,27 @@ function Dashboard() {
 
     setUsername(profileData?.username || '')
     setAccountType(nextAccountType)
+
+    setMarketMoversLoading(true)
+    const { data: discoveryData, error: discoveryError } = await supabase.functions.invoke(
+      'pokewallet-search',
+      {
+        body: {
+          mode: 'discover',
+        },
+      }
+    )
+
+    if (discoveryError) {
+      console.warn('Dashboard market movers failed:', discoveryError)
+      setMarketMovers([])
+    } else {
+      const movers = Array.isArray(discoveryData?.top_movers)
+        ? discoveryData.top_movers.slice(0, 5)
+        : []
+      setMarketMovers(movers)
+    }
+    setMarketMoversLoading(false)
 
     const { data: wishlistSummaryData, error: wishlistSummaryError } =
       await supabase.rpc('get_user_wishlist_summary')
@@ -296,7 +337,7 @@ function Dashboard() {
             new Date(a.starts_at || 0).getTime() -
             new Date(b.starts_at || 0).getTime()
         )
-        .slice(0, 3) || []
+        .slice(0, 2) || []
 
     setStats(nextStats)
     setUpcomingShows(sortedVendorShows)
@@ -333,12 +374,29 @@ function Dashboard() {
     })
   }
 
+  function parseChangePercent(value) {
+    if (value === null || value === undefined) return 0
+
+    const parsed = Number(String(value).replace('%', '').replace('+', '').trim())
+    return Number.isFinite(parsed) ? parsed : 0
+  }
+
+  function formatChangePercent(value) {
+    const parsed = parseChangePercent(value)
+    const prefix = parsed > 0 ? '+' : ''
+    return `${prefix}${parsed.toFixed(1)}%`
+  }
+
+  const maxMoverChange = Math.max(
+    ...marketMovers.map((card) => Math.max(parseChangePercent(card.change_7d), 0)),
+    1
+  )
+
   const potentialProfit = stats.listedValue - stats.costBasis
   const totalWishlistListings = wishlistMatches.reduce(
     (total, item) => total + Number(item.total_matches || 0),
     0
   )
-  const visibleWishlistMatches = wishlistMatches.slice(0, 3)
   const activeShowDayEvent = showDayEvents[0] || null
 
   return (
@@ -363,19 +421,67 @@ function Dashboard() {
             </div>
           </div>
 
-          <button
-            onClick={handleLogout}
-            className="rounded-xl border border-[#222] bg-[#111] p-3 text-gray-300 hover:text-white"
-            aria-label="Log out"
-          >
-            <LogOut size={18} />
-          </button>
+          <div className="flex shrink-0 items-center gap-2">
+            <button
+              type="button"
+              onClick={() => navigate('/notifications')}
+              className="relative rounded-xl border border-[#222] bg-[#111] p-3 text-gray-300 transition hover:text-white"
+              aria-label={
+                unreadNotificationCount > 0
+                  ? `${unreadNotificationCount} unread card alerts`
+                  : 'Card alerts'
+              }
+              title="Card Alerts"
+            >
+              <Bell size={18} />
+
+              {unreadNotificationCount > 0 && (
+                <span className="absolute -right-2 -top-2 flex h-5 min-w-5 items-center justify-center rounded-full bg-yellow-300 px-1 text-[10px] font-black text-black">
+                  {unreadNotificationCount > 99 ? '99+' : unreadNotificationCount}
+                </span>
+              )}
+            </button>
+
+            <button
+              onClick={handleLogout}
+              className="rounded-xl border border-[#222] bg-[#111] p-3 text-gray-300 hover:text-white"
+              aria-label="Log out"
+            >
+              <LogOut size={18} />
+            </button>
+          </div>
         </div>
 
         {message && (
           <p className="mb-4 rounded-xl border border-[#222] bg-[#111] p-3 text-sm text-gray-300">
             {message}
           </p>
+        )}
+
+        {!loading && unreadNotificationCount > 0 && (
+          <button
+            type="button"
+            onClick={() => navigate('/notifications')}
+            className="mb-6 flex w-full items-center justify-between gap-4 rounded-2xl border border-yellow-900/60 bg-yellow-950/20 p-4 text-left transition hover:bg-yellow-950/30"
+          >
+            <div className="flex min-w-0 items-center gap-3">
+              <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-yellow-300 text-black">
+                <Bell size={18} />
+              </div>
+
+              <div className="min-w-0">
+                <p className="font-bold text-white">
+                  {unreadNotificationCount} new card{' '}
+                  {unreadNotificationCount === 1 ? 'match' : 'matches'}
+                </p>
+                <p className="mt-1 text-xs text-gray-400">
+                  Wishlist cards were found at shows you saved.
+                </p>
+              </div>
+            </div>
+
+            <ArrowRight size={17} className="shrink-0 text-yellow-300" />
+          </button>
         )}
 
         {!loading && activeShowDayEvent && (
@@ -437,13 +543,42 @@ function Dashboard() {
                 : ''}
             </p>
 
+            {Number(activeShowDayEvent.matched_wishlist_item_count || 0) > 0 && (
+              <div className="mt-4 flex items-center gap-3 rounded-2xl bg-black/10 p-3">
+                <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-black text-yellow-300">
+                  <Target size={18} />
+                </div>
+
+                <div className="min-w-0">
+                  <p className="font-black">My Hunt is ready</p>
+                  <p className="mt-0.5 text-xs font-semibold text-black/65">
+                    {Number(activeShowDayEvent.matched_wishlist_item_count || 0)} wishlist{' '}
+                    {Number(activeShowDayEvent.matched_wishlist_item_count || 0) === 1
+                      ? 'card'
+                      : 'cards'}{' '}
+                    matched at this show.
+                  </p>
+                </div>
+              </div>
+            )}
+
             <div className="mt-4 grid grid-cols-2 gap-2">
               <Link
-                to={`/map?event=${activeShowDayEvent.event_id}&view=search`}
+                to={`/map?event=${activeShowDayEvent.event_id}&view=${
+                  Number(activeShowDayEvent.matched_wishlist_item_count || 0) > 0
+                    ? 'hunt'
+                    : 'search'
+                }`}
                 className="flex items-center justify-center gap-2 rounded-xl bg-black p-3 text-sm font-bold text-white"
               >
-                <Search size={16} />
-                Search This Show
+                {Number(activeShowDayEvent.matched_wishlist_item_count || 0) > 0 ? (
+                  <Target size={16} />
+                ) : (
+                  <Search size={16} />
+                )}
+                {Number(activeShowDayEvent.matched_wishlist_item_count || 0) > 0
+                  ? 'Open My Hunt'
+                  : 'Search This Show'}
               </Link>
 
               <Link
@@ -496,119 +631,197 @@ function Dashboard() {
               )}
             </section>
 
-            <section className="mb-6">
-              <div className="mb-3 flex items-center justify-between">
-                <div>
-                  <div className="flex items-center gap-2">
-                    <Sparkles size={20} className="text-green-300" />
-                    <h2 className="text-xl font-semibold">Wishlist Matches</h2>
-                  </div>
+            <section className="mb-6 rounded-3xl border border-[#222] bg-[#111] p-4">
+              <div className="flex items-start justify-between gap-4">
+                <div className="min-w-0">
+                  <p className="text-xs font-bold uppercase tracking-[0.16em] text-gray-500">
+                    Your Hunt
+                  </p>
 
-                  {wishlistMatches.length > 0 && (
-                    <p className="mt-1 text-xs text-gray-500">
-                      {wishlistMatches.length} wanted card
-                      {wishlistMatches.length === 1 ? '' : 's'} ·{' '}
-                      {totalWishlistListings} vendor listing
-                      {totalWishlistListings === 1 ? '' : 's'}
-                    </p>
+                  {wishlistMatches.length > 0 ? (
+                    <>
+                      <p className="mt-2 text-2xl font-black text-white">
+                        {wishlistMatches.length} wishlist{' '}
+                        {wishlistMatches.length === 1 ? 'card' : 'cards'} matched
+                      </p>
+                      <p className="mt-1 text-sm text-gray-400">
+                        {totalWishlistListings} vendor listing
+                        {totalWishlistListings === 1 ? '' : 's'} found at shows you saved.
+                      </p>
+                    </>
+                  ) : (
+                    <>
+                      <p className="mt-2 text-xl font-black text-white">
+                        No matches yet
+                      </p>
+                      <p className="mt-1 text-sm text-gray-400">
+                        Save shows and add cards to your wishlist. Vendly will surface matching vendor inventory here.
+                      </p>
+                    </>
                   )}
                 </div>
 
+                <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl bg-black text-yellow-300">
+                  <Target size={20} />
+                </div>
+              </div>
+
+              <div className="mt-4 grid grid-cols-2 gap-2">
                 <Link
                   to="/inventory"
-                  className="text-xs font-semibold text-yellow-300"
+                  className="flex items-center justify-center gap-2 rounded-xl bg-white p-3 text-sm font-bold text-black"
                 >
-                  View wishlist
+                  <Package size={16} />
+                  {wishlistMatches.length > 0 ? 'View Wishlist' : 'Add Wishlist'}
+                </Link>
+
+                <Link
+                  to="/notifications"
+                  className="flex items-center justify-center gap-2 rounded-xl border border-[#2a2a2a] bg-black p-3 text-sm font-bold text-white"
+                >
+                  <Bell size={16} />
+                  Card Alerts
+                </Link>
+              </div>
+            </section>
+
+            <section className="mb-6">
+              <div className="mb-3 flex items-end justify-between gap-3">
+                <div>
+                  <div className="flex items-center gap-2">
+                    <TrendingUp size={20} className="text-green-300" />
+                    <h2 className="text-xl font-semibold">Market Movers</h2>
+                  </div>
+                  <p className="mt-1 text-xs text-gray-500">
+                    Biggest TCGPlayer price gains over the last 7 days.
+                  </p>
+                </div>
+
+                <Link
+                  to="/search"
+                  className="shrink-0 text-xs font-semibold text-yellow-300"
+                >
+                  Explore
                 </Link>
               </div>
 
-              {visibleWishlistMatches.length === 0 ? (
-                <EmptyCard
-                  title="No wishlist matches yet"
-                  message="Add cards to your wishlist and Vendly will show matching vendor inventory from upcoming shows."
-                  to="/search"
-                  action="Add Wishlist Cards"
-                />
+              {marketMoversLoading ? (
+                <div className="rounded-2xl border border-[#222] bg-[#111] p-4 text-sm text-gray-400">
+                  Loading market movers...
+                </div>
+              ) : marketMovers.length === 0 ? (
+                <div className="rounded-2xl border border-[#222] bg-[#111] p-4">
+                  <p className="font-semibold text-white">Market data unavailable</p>
+                  <p className="mt-1 text-sm text-gray-400">
+                    Try again later.
+                  </p>
+                </div>
               ) : (
-                <div className="space-y-3">
-                  {visibleWishlistMatches.map((match) => (
-                    <Link
-                      key={match.wishlist_item_id}
-                      to="/inventory"
-                      className="block rounded-2xl border border-green-900/70 bg-green-950/20 p-4 transition hover:bg-green-950/35"
-                    >
-                      <div className="flex items-start justify-between gap-3">
-                        <div className="min-w-0">
-                          <p className="break-words font-bold text-white">
-                            {match.card_name}
-                          </p>
+                <div className="overflow-hidden rounded-2xl border border-[#222] bg-[#111]">
+                  <div className="divide-y divide-[#222]">
+                    {marketMovers.slice(0, 4).map((card, index) => {
+                      const change = parseChangePercent(card.change_7d)
+                      const imageUrl =
+                        card.image_url ||
+                        card.image ||
+                        card.image_small ||
+                        card.imageSmall ||
+                        card.images?.small ||
+                        card.images?.large ||
+                        card.imageUrl ||
+                        card.card_image ||
+                        card.cardImage ||
+                        null
 
-                          <p className="mt-1 text-sm font-semibold text-green-300">
-                            {Number(match.total_matches || 0)}{' '}
-                            {Number(match.total_matches || 0) === 1
-                              ? 'match'
-                              : 'matches'}{' '}
-                            available
-                          </p>
-                        </div>
+                      return (
+                        <Link
+                          key={card.id || `${card.card_name}-${card.card_number}-${index}`}
+                          to={`/search?q=${encodeURIComponent(card.card_name || card.name || '')}`}
+                          className="flex items-center gap-3 p-3 transition hover:bg-white/[0.025]"
+                        >
+                          <div className="relative shrink-0">
+                            {imageUrl ? (
+                              <img
+                                src={imageUrl}
+                                alt={card.card_name || card.name || 'Market mover'}
+                                className="h-[68px] w-[49px] rounded-lg bg-black object-contain"
+                                loading="lazy"
+                              />
+                            ) : (
+                              <div className="flex h-[68px] w-[49px] items-center justify-center rounded-lg border border-[#2a2a2a] bg-black">
+                                <Package size={17} className="text-gray-700" />
+                              </div>
+                            )}
 
-                        <div className="shrink-0 text-right">
-                          <p className="text-xs text-gray-500">Lowest</p>
-                          <p className="font-bold text-yellow-300">
-                            {match.lowest_price === null ||
-                            match.lowest_price === undefined
-                              ? 'Not listed'
-                              : formatMoney(match.lowest_price)}
-                          </p>
-                        </div>
-                      </div>
+                            <span className="absolute -left-2 -top-2 flex h-5 min-w-5 items-center justify-center rounded-full bg-white px-1 text-[10px] font-black text-black">
+                              {index + 1}
+                            </span>
+                          </div>
 
-                      {match.best_event_name && (
-                        <div className="mt-3 flex items-start gap-2 border-t border-green-900/50 pt-3 text-xs text-gray-300">
-                          <MapPin
-                            size={14}
-                            className="mt-0.5 shrink-0 text-green-300"
-                          />
-                          <p>
-                            {match.best_event_name}
-                            {match.best_booth_number
-                              ? ` · Booth ${match.best_booth_number}`
-                              : ''}
-                            {match.best_is_saved_show ? ' · Saved show' : ''}
-                          </p>
-                        </div>
-                      )}
-                    </Link>
-                  ))}
+                          <div className="min-w-0 flex-1">
+                            <div className="flex items-start justify-between gap-3">
+                              <div className="min-w-0">
+                                <p className="truncate font-semibold text-white">
+                                  {card.card_name || card.name || 'Unknown card'}
+                                </p>
+                                <p className="mt-1 truncate text-xs text-gray-500">
+                                  {[card.set_name, card.card_number]
+                                    .filter(Boolean)
+                                    .join(' · ') || 'Set unavailable'}
+                                </p>
+                              </div>
 
-                  {wishlistMatches.length > visibleWishlistMatches.length && (
-                    <Link
-                      to="/inventory"
-                      className="flex items-center justify-center gap-2 rounded-xl border border-[#222] bg-[#111] p-3 text-sm font-semibold text-gray-300"
-                    >
-                      View {wishlistMatches.length - visibleWishlistMatches.length}{' '}
-                      more matched card
-                      {wishlistMatches.length - visibleWishlistMatches.length === 1
-                        ? ''
-                        : 's'}
-                      <ArrowRight size={15} />
-                    </Link>
-                  )}
+                              <div className="shrink-0 text-right">
+                                <p
+                                  className={`text-sm font-black ${
+                                    change >= 0 ? 'text-green-300' : 'text-red-300'
+                                  }`}
+                                >
+                                  {formatChangePercent(card.change_7d)}
+                                </p>
+                                <p className="mt-1 text-xs text-gray-400">
+                                  {card.market_price === null ||
+                                  card.market_price === undefined
+                                    ? '—'
+                                    : formatMoney(card.market_price)}
+                                </p>
+                              </div>
+                            </div>
+
+                            <div className="mt-3 h-1.5 overflow-hidden rounded-full bg-black">
+                              <div
+                                className={`h-full rounded-full ${
+                                  change >= 0 ? 'bg-green-300' : 'bg-red-300'
+                                }`}
+                                style={{
+                                  width: `${Math.max(
+                                    12,
+                                    Math.min(
+                                      100,
+                                      (Math.max(change, 0) / maxMoverChange) * 100
+                                    )
+                                  )}%`,
+                                }}
+                              />
+                            </div>
+                          </div>
+                        </Link>
+                      )
+                    })}
+                  </div>
                 </div>
               )}
             </section>
 
-            <section className="mb-6">
-              <div className="mb-3 flex items-center justify-between">
-                <h2 className="text-xl font-semibold">
-                  {isVendor ? 'Inventory Snapshot' : 'Collection Snapshot'}
-                </h2>
-                <Link to="/inventory" className="text-xs font-semibold text-yellow-300">
-                  View all
-                </Link>
-              </div>
+            {isVendor && (
+              <section className="mb-6">
+                <div className="mb-3 flex items-center justify-between">
+                  <h2 className="text-xl font-semibold">Inventory Snapshot</h2>
+                  <Link to="/inventory" className="text-xs font-semibold text-yellow-300">
+                    View all
+                  </Link>
+                </div>
 
-              {isVendor ? (
                 <div className="grid grid-cols-2 gap-3">
                   <StatCard
                     icon={<Package size={18} />}
@@ -631,16 +844,8 @@ function Dashboard() {
                     value={stats.soldOutCount}
                   />
                 </div>
-              ) : (
-                <div className="grid grid-cols-1 gap-3">
-                  <StatCard
-                    icon={<Package size={18} />}
-                    label="Cards Tracked"
-                    value={stats.availableCount}
-                  />
-                </div>
-              )}
-            </section>
+              </section>
+            )}
 
             {isVendor && (
               <section className="mb-6 rounded-3xl border border-[#222] bg-[#111] p-4">
@@ -818,14 +1023,6 @@ function Dashboard() {
                 )}
               </section>
             )}
-
-            <Link
-              to="/search"
-              className="flex w-full items-center justify-center gap-2 rounded-xl bg-white p-4 font-semibold text-black"
-            >
-              <Search size={18} />
-              {isVendor ? 'Search Cards' : 'Add Cards to Collection'}
-            </Link>
 
           </>
         )}

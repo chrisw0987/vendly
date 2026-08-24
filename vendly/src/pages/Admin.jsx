@@ -21,6 +21,7 @@ function Admin() {
   const [loading, setLoading] = useState(true)
   const [message, setMessage] = useState('')
   const [activeTab, setActiveTab] = useState('applications')
+  const [showSection, setShowSection] = useState('current')
 
   const [applications, setApplications] = useState([])
   const [applicationFilter, setApplicationFilter] = useState('pending')
@@ -472,6 +473,34 @@ function Admin() {
     setMessage('Show deleted.')
   }
 
+
+  function getEventEndTimestamp(event) {
+    if (event?.end_date) {
+      const end = new Date(`${event.end_date}T23:59:59.999`)
+      return Number.isNaN(end.getTime()) ? null : end.getTime()
+    }
+
+    if (event?.starts_at) {
+      const start = new Date(event.starts_at)
+      if (Number.isNaN(start.getTime())) return null
+
+      const endOfStartDay = new Date(start)
+      endOfStartDay.setHours(23, 59, 59, 999)
+      return endOfStartDay.getTime()
+    }
+
+    return null
+  }
+
+  function isPastEvent(event) {
+    const endTimestamp = getEventEndTimestamp(event)
+    return endTimestamp !== null && endTimestamp < Date.now()
+  }
+
+  function isCurrentOrUpcomingEvent(event) {
+    return !isPastEvent(event)
+  }
+
   function sortEventsByDate(a, b) {
     return new Date(a.starts_at || 0).getTime() - new Date(b.starts_at || 0).getTime()
   }
@@ -516,6 +545,22 @@ function Admin() {
         return 'bg-yellow-300 text-black'
     }
   }
+
+  const upcomingEvents = useMemo(
+    () => events.filter(isCurrentOrUpcomingEvent),
+    [events]
+  )
+
+  const pastEvents = useMemo(
+    () =>
+      events
+        .filter(isPastEvent)
+        .sort(
+          (a, b) =>
+            (getEventEndTimestamp(b) || 0) - (getEventEndTimestamp(a) || 0)
+        ),
+    [events]
+  )
 
   const filteredApplications = useMemo(() => {
     if (applicationFilter === 'all') return applications
@@ -885,7 +930,7 @@ function Admin() {
             </div>
 
             <div className="mb-3 flex items-center justify-between">
-              <h2 className="text-xl font-bold">Existing Shows</h2>
+              <h2 className="text-xl font-bold">Manage Shows</h2>
               <button
                 onClick={fetchEvents}
                 className="rounded-xl border border-[#222] bg-[#111] p-3 text-gray-300"
@@ -894,15 +939,55 @@ function Admin() {
               </button>
             </div>
 
-            {events.length === 0 ? (
+            <div className="mb-4 flex rounded-2xl border border-[#222] bg-[#111] p-1">
+              <button
+                type="button"
+                onClick={() => setShowSection('current')}
+                className={`w-1/2 rounded-xl py-3 text-sm font-semibold transition ${
+                  showSection === 'current'
+                    ? 'bg-white text-black'
+                    : 'text-gray-400'
+                }`}
+              >
+                Current & Upcoming
+                <span className="ml-2 rounded-full bg-black/10 px-2 py-0.5 text-xs">
+                  {upcomingEvents.length}
+                </span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setShowSection('past')}
+                className={`w-1/2 rounded-xl py-3 text-sm font-semibold transition ${
+                  showSection === 'past'
+                    ? 'bg-white text-black'
+                    : 'text-gray-400'
+                }`}
+              >
+                Past Shows
+                <span className="ml-2 rounded-full bg-black/10 px-2 py-0.5 text-xs">
+                  {pastEvents.length}
+                </span>
+              </button>
+            </div>
+
+            {(showSection === 'current' ? upcomingEvents : pastEvents).length === 0 ? (
               <EmptyState
                 icon={<CalendarDays className="mx-auto mb-3 text-gray-500" size={36} />}
-                title="No shows yet"
-                message="Create your first show above."
+                title={
+                  showSection === 'current'
+                    ? 'No current or upcoming shows'
+                    : 'No past shows'
+                }
+                message={
+                  showSection === 'current'
+                    ? 'Create a show above or wait for an upcoming event.'
+                    : 'Shows will move here automatically after they end.'
+                }
               />
             ) : (
               <div className="space-y-3">
-                {events.map((event) => (
+                {(showSection === 'current' ? upcomingEvents : pastEvents).map((event) => (
                   <div
                     key={event.id}
                     className="rounded-3xl border border-[#222] bg-[#111] p-4"
@@ -921,9 +1006,16 @@ function Admin() {
                       </div>
 
                       <div className="min-w-0 flex-1">
-                        <h3 className="break-words text-lg font-bold leading-tight">
-                          {event.name}
-                        </h3>
+                        <div className="flex flex-wrap items-center gap-2">
+                          <h3 className="break-words text-lg font-bold leading-tight">
+                            {event.name}
+                          </h3>
+                          {isPastEvent(event) && (
+                            <span className="rounded-full border border-[#333] bg-black px-2 py-1 text-[10px] font-black uppercase tracking-wide text-gray-500">
+                              Past
+                            </span>
+                          )}
+                        </div>
                         <p className="mt-1 text-sm text-gray-400">
                           {event.venue || 'Venue TBD'}
                         </p>

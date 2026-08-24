@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { supabase } from '../lib/supabase'
+import { useAuth } from '../pages/AuthContext'
 import Navbar from '../components/Navbar'
 import {
   CalendarDays,
@@ -17,6 +18,7 @@ import {
 } from 'lucide-react'
 
 function Shows() {
+  const { authReady } = useAuth()
   const [activeTab, setActiveTab] = useState('available')
   const [events, setEvents] = useState([])
   const [profiles, setProfiles] = useState([])
@@ -110,7 +112,7 @@ function Shows() {
 
     const { data: eventsData, error: eventsError } = await supabase
       .from('events')
-      .select('id, name, city, state, venue, address, starts_at, icon_url')
+      .select('id, name, city, state, venue, address, starts_at, end_date, icon_url')
       .order('starts_at', { ascending: true })
 
     if (eventsError) {
@@ -426,6 +428,34 @@ function Shows() {
     setMessage('Your vendor application has been submitted. Please wait while we review it.')
   }
 
+
+  function getEventEndTimestamp(event) {
+    if (event?.end_date) {
+      const end = new Date(`${event.end_date}T23:59:59.999`)
+      return Number.isNaN(end.getTime()) ? null : end.getTime()
+    }
+
+    if (event?.starts_at) {
+      const start = new Date(event.starts_at)
+      if (Number.isNaN(start.getTime())) return null
+
+      const endOfStartDay = new Date(start)
+      endOfStartDay.setHours(23, 59, 59, 999)
+      return endOfStartDay.getTime()
+    }
+
+    return null
+  }
+
+  function isPastEvent(event) {
+    const endTimestamp = getEventEndTimestamp(event)
+    return endTimestamp !== null && endTimestamp < Date.now()
+  }
+
+  function isCurrentOrUpcomingEvent(event) {
+    return !isPastEvent(event)
+  }
+
   function formatDate(date) {
     if (!date) return 'TBD'
 
@@ -455,13 +485,27 @@ function Shows() {
     [myProfiles]
   )
 
-  const availableShows = events
+  const visibleEvents = useMemo(
+    () =>
+      accountType === 'admin'
+        ? events
+        : events.filter(isCurrentOrUpcomingEvent),
+    [events, accountType]
+  )
+
+  const availableShows = visibleEvents
+
   const myShows = myProfiles
     .map((profile) => ({
       profile,
       event: getEventForProfile(profile),
     }))
     .filter((item) => item.event)
+    .filter((item) => accountType === 'admin' || isCurrentOrUpcomingEvent(item.event))
+
+  if (!authReady) {
+    return <div className="min-h-screen bg-black" />
+  }
 
   if (!loading && !isVendor) {
     return (
@@ -593,7 +637,7 @@ function Shows() {
           <div className="mb-5 grid grid-cols-2 gap-2">
             <div className="rounded-2xl border border-[#222] bg-[#111] p-4">
               <p className="text-xs text-gray-500">Upcoming Shows</p>
-              <p className="mt-1 text-2xl font-bold">{events.length}</p>
+              <p className="mt-1 text-2xl font-bold">{availableShows.length}</p>
             </div>
 
             <div className="rounded-2xl border border-[#222] bg-[#111] p-4">
@@ -674,7 +718,7 @@ function Shows() {
         <div className="mb-5 grid grid-cols-2 gap-2">
           <div className="rounded-2xl border border-[#222] bg-[#111] p-4">
             <p className="text-xs text-gray-500">Available</p>
-            <p className="mt-1 text-2xl font-bold">{events.length}</p>
+            <p className="mt-1 text-2xl font-bold">{availableShows.length}</p>
           </div>
 
           <div className="rounded-2xl border border-[#222] bg-[#111] p-4">

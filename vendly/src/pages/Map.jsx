@@ -15,17 +15,24 @@ import {
   CheckCircle2,
 } from 'lucide-react'
 import { supabase } from '../lib/supabase'
+import { useAuth } from '../pages/AuthContext'
 
 
 function Map() {
   const location = useLocation()
   const navigate = useNavigate()
+  const {
+    user: authUser,
+    accountType: authAccountType,
+    authReady,
+  } = useAuth()
   const searchSectionRef = useRef(null)
   const huntSectionRef = useRef(null)
   const floorplanSectionRef = useRef(null)
 
   const [activeTab, setActiveTab] = useState('explore')
   const [currentUser, setCurrentUser] = useState(null)
+  const [accountType, setAccountType] = useState('user')
   const [showGuestPrompt, setShowGuestPrompt] = useState(false)
   const [savedEvents, setSavedEvents] = useState([])
   const [savedEventIds, setSavedEventIds] = useState([])
@@ -63,11 +70,11 @@ function Map() {
   const [vendorInventorySort, setVendorInventorySort] = useState('name-asc')
 
   useEffect(() => {
-    initializeMap()
-  }, [])
+    if (!authReady) return
+    initializeMap(authUser, authAccountType)
+  }, [authReady, authUser, authAccountType])
 
-  async function initializeMap() {
-    const user = await getUser()
+  async function initializeMap(user, resolvedAccountType) {
     setCurrentUser(user || null)
 
     const params = new URLSearchParams(location.search)
@@ -85,12 +92,14 @@ function Map() {
     }
 
     if (user) {
-      fetchSavedEvents()
+      setAccountType(resolvedAccountType || 'user')
+      fetchSavedEvents(resolvedAccountType || 'user')
+      fetchEvents(resolvedAccountType || 'user')
     } else {
+      setAccountType('user')
       setActiveTab('explore')
+      fetchEvents('user')
     }
-
-    fetchEvents()
     useUserLocation()
   }
 
@@ -170,7 +179,7 @@ function Map() {
     return user
   }
 
-  async function fetchEvents() {
+  async function fetchEvents(accountTypeOverride = accountType) {
     setLoadingEvents(true)
 
     const { data, error } = await supabase
@@ -182,13 +191,18 @@ function Map() {
       setMessage(error.message)
       setEvents([])
     } else {
-      setEvents(data || [])
+      const nextEvents =
+        accountTypeOverride === 'admin'
+          ? data || []
+          : (data || []).filter(isCurrentOrUpcomingEvent)
+
+      setEvents(nextEvents)
     }
 
     setLoadingEvents(false)
   }
 
-  async function fetchSavedEvents() {
+  async function fetchSavedEvents(accountTypeOverride = accountType) {
     const user = await getUser()
     if (!user) return
 
@@ -224,10 +238,39 @@ function Map() {
           ...row.events,
           saved_row_id: row.id,
         }))
-        .filter(Boolean) || []
+        .filter(Boolean)
+        .filter((event) => accountTypeOverride === 'admin' || isCurrentOrUpcomingEvent(event)) || []
 
     setSavedEvents(saved)
     setSavedEventIds(saved.map((event) => event.id))
+  }
+
+
+  function getEventEndTimestamp(event) {
+    if (event?.end_date) {
+      const end = new Date(`${event.end_date}T23:59:59.999`)
+      return Number.isNaN(end.getTime()) ? null : end.getTime()
+    }
+
+    if (event?.starts_at) {
+      const start = new Date(event.starts_at)
+      if (Number.isNaN(start.getTime())) return null
+
+      const endOfStartDay = new Date(start)
+      endOfStartDay.setHours(23, 59, 59, 999)
+      return endOfStartDay.getTime()
+    }
+
+    return null
+  }
+
+  function isPastEvent(event) {
+    const endTimestamp = getEventEndTimestamp(event)
+    return endTimestamp !== null && endTimestamp < Date.now()
+  }
+
+  function isCurrentOrUpcomingEvent(event) {
+    return !isPastEvent(event)
   }
 
   function useUserLocation() {
@@ -819,6 +862,11 @@ function Map() {
   }
 
   async function openMoreInfo(event) {
+    if (accountType !== 'admin' && isPastEvent(event)) {
+      setMessage('This show has ended and is no longer accessible.')
+      return
+    }
+
     setSelectedEvent(event)
     setSelectedVendorTable(null)
     clearShowInventorySearch()
@@ -979,6 +1027,10 @@ function Map() {
     vendorInventoryType,
     vendorInventorySort,
   ])
+
+  if (!authReady) {
+    return <div className="min-h-screen bg-black" />
+  }
 
   return (
     <div className="min-h-screen bg-black text-white pb-24">

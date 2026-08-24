@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { supabase } from '../lib/supabase'
+import { useAuth } from '../pages/AuthContext'
 import Navbar from '../components/Navbar'
 import CardScanner from '../components/CardScanner'
 
@@ -27,6 +28,11 @@ import {
 
 function Search() {
   const navigate = useNavigate()
+  const {
+    user: authUser,
+    accountType: authAccountType,
+    authReady,
+  } = useAuth()
   const [search, setSearch] = useState('')
   const [activeSearchQuery, setActiveSearchQuery] = useState('')
   const [cards, setCards] = useState([])
@@ -106,8 +112,8 @@ function Search() {
   const [loadingDiscovery, setLoadingDiscovery] = useState(false)
   const [discoveryLoaded, setDiscoveryLoaded] = useState(false)
 
-  const isVendor = accountType === 'vendor' || accountType === 'admin'
-  const isGuest = !currentUser
+  const isVendor = authAccountType === 'vendor' || authAccountType === 'admin'
+  const isGuest = !authUser
 
   useEffect(() => {
     if (searchPageMemory) {
@@ -1868,6 +1874,10 @@ function Search() {
     return items
   }, [currentPage, totalPages])
 
+  if (!authReady) {
+    return <div className="min-h-screen bg-black" />
+  }
+
   return (
     <div className="min-h-screen bg-black text-white pb-24">
       <main className="mx-auto max-w-[430px] px-5 pt-8">
@@ -1926,15 +1936,6 @@ function Search() {
               </button>
             </div>
 
-            <button
-              type="button"
-              onClick={() => setShowCardScanner(true)}
-              className="mt-3 flex w-full items-center justify-center gap-2 rounded-xl border border-yellow-900/70 bg-yellow-950/20 p-3 text-sm font-bold text-yellow-300"
-            >
-              <Camera size={17} />
-              Scan a Card Instantly
-            </button>
-
             <div className="mt-5 grid grid-cols-3 gap-2 border-t border-white/10 pt-4 text-center">
               <div>
                 <p className="text-xs font-bold text-white">Search</p>
@@ -1950,26 +1951,6 @@ function Search() {
               </div>
             </div>
 
-            <div className="mt-4 rounded-2xl border border-blue-900/50 bg-blue-950/15 p-4">
-              <div className="flex items-start gap-3">
-                <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-blue-950/60 text-blue-300">
-                  <Sparkles size={17} />
-                </div>
-
-                <div className="min-w-0">
-                  <div className="flex flex-wrap items-center gap-2">
-                    <p className="text-sm font-bold text-white">Card Notifications</p>
-                    <span className="rounded-full border border-blue-900/60 bg-blue-950/40 px-2 py-0.5 text-[9px] font-black uppercase tracking-wide text-blue-300">
-                      Coming Soon
-                    </span>
-                  </div>
-
-                  <p className="mt-1 text-xs leading-5 text-gray-400">
-                    Save the cards you&apos;re hunting and Vendly will alert you when a vendor brings a match to an upcoming show.
-                  </p>
-                </div>
-              </div>
-            </div>
           </section>
         )}
 

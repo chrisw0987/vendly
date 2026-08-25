@@ -43,7 +43,7 @@ function Activity() {
   return (
     <div className="min-h-screen bg-black pb-24 text-white">
       <main className="mx-auto max-w-[430px] px-5 pt-8">
-        <div className="mb-5">
+        <div className="mb-5 text-center">
           <h1 className="text-3xl font-bold">Activity</h1>
           <p className="mt-1 text-sm text-gray-400">
             Keep track of the cards you buy and sell.

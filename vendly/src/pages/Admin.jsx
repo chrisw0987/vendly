@@ -605,8 +605,8 @@ function Admin() {
   return (
     <div className="min-h-screen bg-black px-5 py-8 pb-24 text-white">
       <main className="mx-auto max-w-[430px]">
-        <div className="mb-6">
-          <div className="mb-3 flex h-12 w-12 items-center justify-center rounded-2xl bg-yellow-300 text-black">
+        <div className="mb-6 text-center">
+          <div className="mx-auto mb-3 flex h-12 w-12 items-center justify-center rounded-2xl bg-yellow-300 text-black">
             <ShieldCheck size={24} />
           </div>
 

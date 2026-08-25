@@ -1221,8 +1221,8 @@ function Map() {
           </div>
         )}
 
-        <div className="mb-4 flex items-center justify-between">
-          <div>
+        <div className="relative mb-4">
+          <div className="px-12 text-center">
             <h1 className="text-3xl font-bold">
               {activeTab === 'saved' ? 'Saved Shows' : 'Explore Shows'}
             </h1>
@@ -1235,7 +1235,7 @@ function Map() {
             </p>
           </div>
 
-          <div className="relative">
+          <div className="absolute right-0 top-0">
             <button
               onClick={() => setShowSortMenu(!showSortMenu)}
               className="rounded-xl border border-[#222] bg-[#111] p-3"

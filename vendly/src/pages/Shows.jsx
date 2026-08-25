@@ -508,9 +508,9 @@ function Shows() {
     return (
       <div className="min-h-screen bg-black px-5 py-8 pb-24 text-white">
         <main className="mx-auto max-w-[430px]">
-          <div className="mb-6">
+          <div className="mb-6 text-center">
             <h1 className="text-3xl font-bold">Shows</h1>
-            <p className="mt-1 text-sm text-gray-400">
+            <p className="mx-auto mt-1 max-w-sm text-sm text-gray-400">
               Browse upcoming shows and apply for vendor access.
             </p>
           </div>
@@ -685,9 +685,9 @@ function Shows() {
   return (
     <div className="min-h-screen bg-black px-5 py-8 pb-24 text-white">
       <main className="mx-auto max-w-[430px]">
-        <div className="mb-6">
+        <div className="mb-6 text-center">
           <h1 className="text-3xl font-bold">Shows</h1>
-          <p className="mt-1 text-sm text-gray-400">
+          <p className="mx-auto mt-1 max-w-sm text-sm text-gray-400">
             Join events, manage your booth, and prep show inventory.
           </p>
         </div>

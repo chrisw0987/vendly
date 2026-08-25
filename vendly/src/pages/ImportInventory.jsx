@@ -2026,9 +2026,9 @@ function ImportInventory() {
           Back to Inventory
         </button>
 
-        <div className="mb-8">
+        <div className="mb-8 text-center">
           <h1 className="text-3xl font-bold">Import Inventory</h1>
-          <p className="mt-2 max-w-xl text-sm text-gray-400">
+          <p className="mx-auto mt-2 max-w-xl text-sm text-gray-400">
             Upload your spreadsheet and Vendly will do the setup for you.
             You only need to step in if something looks wrong.
           </p>

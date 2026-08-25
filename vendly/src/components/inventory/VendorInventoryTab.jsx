@@ -1334,7 +1334,7 @@ function VendorInventoryTab() {
                     disabled={!!actionLoading}
                     className="rounded-xl border border-[#222] bg-[#111] px-4 py-3 text-xs font-semibold text-gray-300"
                   >
-                    Clear {selectedCount}
+                    Cancel {selectedCount}
                   </button>
 
                   {isVendor && (

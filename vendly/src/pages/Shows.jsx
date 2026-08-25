@@ -486,11 +486,8 @@ function Shows() {
   )
 
   const visibleEvents = useMemo(
-    () =>
-      accountType === 'admin'
-        ? events
-        : events.filter(isCurrentOrUpcomingEvent),
-    [events, accountType]
+    () => events.filter(isCurrentOrUpcomingEvent),
+    [events]
   )
 
   const availableShows = visibleEvents
@@ -501,7 +498,7 @@ function Shows() {
       event: getEventForProfile(profile),
     }))
     .filter((item) => item.event)
-    .filter((item) => accountType === 'admin' || isCurrentOrUpcomingEvent(item.event))
+    .filter((item) => isCurrentOrUpcomingEvent(item.event))
 
   if (!authReady) {
     return <div className="min-h-screen bg-black" />
@@ -724,7 +721,7 @@ function Shows() {
           <div className="rounded-2xl border border-[#222] bg-[#111] p-4">
             <p className="text-xs text-gray-500">Joined</p>
             <p className="mt-1 text-2xl font-bold text-yellow-300">
-              {myProfiles.length}
+              {myShows.length}
             </p>
           </div>
         </div>

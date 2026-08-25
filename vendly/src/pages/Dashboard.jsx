@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { supabase } from '../lib/supabase'
+import { useAuth } from './AuthContext'
 import Navbar from '../components/Navbar'
 
 import {
@@ -12,7 +13,6 @@ import {
   CalendarDays,
   DollarSign,
   Eye,
-  LogOut,
   Plus,
   ArrowRight,
   ShieldCheck,
@@ -20,10 +20,13 @@ import {
   Bell,
   Target,
   TrendingUp,
+  Camera,
+  User,
 } from 'lucide-react'
 
 function Dashboard() {
   const navigate = useNavigate()
+  const { profileImageUrl, refreshProfile } = useAuth()
 
   const [loading, setLoading] = useState(true)
   const [message, setMessage] = useState('')
@@ -45,6 +48,8 @@ function Dashboard() {
   const [unreadNotificationCount, setUnreadNotificationCount] = useState(0)
   const [marketMovers, setMarketMovers] = useState([])
   const [marketMoversLoading, setMarketMoversLoading] = useState(true)
+  const [uploadingProfileImage, setUploadingProfileImage] = useState(false)
+  const [profileImageMessage, setProfileImageMessage] = useState('')
 
   const isVendor = accountType === 'vendor' || accountType === 'admin'
   const isAdmin = accountType === 'admin'
@@ -91,7 +96,7 @@ function Dashboard() {
 
     const { data: profileData, error: profileError } = await supabase
       .from('users')
-      .select('username, account_type')
+      .select('username, account_type, profile_image_url')
       .eq('id', user.id)
       .maybeSingle()
 
@@ -215,6 +220,7 @@ function Dashboard() {
             state,
             venue,
             starts_at,
+            end_date,
             icon_url
           )
         `)
@@ -267,6 +273,7 @@ function Dashboard() {
             state,
             venue,
             starts_at,
+            end_date,
             icon_url
           )
         `)
@@ -321,6 +328,7 @@ function Dashboard() {
           event: profile.events,
         }))
         .filter((profile) => profile.event)
+        .filter((profile) => isCurrentOrUpcomingEvent(profile.event))
         .sort(
           (a, b) =>
             new Date(a.event.starts_at || 0).getTime() -
@@ -332,6 +340,7 @@ function Dashboard() {
       savedShowsData
         ?.map((row) => row.events)
         .filter(Boolean)
+        .filter(isCurrentOrUpcomingEvent)
         .sort(
           (a, b) =>
             new Date(a.starts_at || 0).getTime() -
@@ -346,9 +355,95 @@ function Dashboard() {
     setLoading(false)
   }
 
-  async function handleLogout() {
-    await supabase.auth.signOut()
-    navigate('/')
+
+  async function handleProfileImageUpload(event) {
+    const file = event.target.files?.[0]
+    event.target.value = ''
+
+    if (!file || uploadingProfileImage) return
+
+    if (!file.type.startsWith('image/')) {
+      setProfileImageMessage('Please choose an image file.')
+      return
+    }
+
+    if (file.size > 5 * 1024 * 1024) {
+      setProfileImageMessage('Profile images must be 5 MB or smaller.')
+      return
+    }
+
+    const user = await getUserOrRedirect()
+    if (!user) return
+
+    setUploadingProfileImage(true)
+    setProfileImageMessage('')
+
+    try {
+      const extension =
+        file.name.split('.').pop()?.toLowerCase().replace(/[^a-z0-9]/g, '') || 'jpg'
+      const filePath = `${user.id}/profile.${extension}`
+
+      const { error: uploadError } = await supabase.storage
+        .from('user-pfp')
+        .upload(filePath, file, {
+          upsert: true,
+          contentType: file.type,
+          cacheControl: '3600',
+        })
+
+      if (uploadError) {
+        setProfileImageMessage(uploadError.message)
+        return
+      }
+
+      const { data: publicData } = supabase.storage
+        .from('user-pfp')
+        .getPublicUrl(filePath)
+
+      const publicUrl = `${publicData.publicUrl}?v=${Date.now()}`
+
+      const { error: profileUpdateError } = await supabase
+        .from('users')
+        .update({ profile_image_url: publicUrl })
+        .eq('id', user.id)
+
+      if (profileUpdateError) {
+        setProfileImageMessage(profileUpdateError.message)
+        return
+      }
+
+      await refreshProfile()
+      setProfileImageMessage('Profile photo updated.')
+    } catch (error) {
+      setProfileImageMessage(
+        error instanceof Error ? error.message : 'Unable to update profile photo.'
+      )
+    } finally {
+      setUploadingProfileImage(false)
+    }
+  }
+
+  function getEventEndTimestamp(event) {
+    if (event?.end_date) {
+      const end = new Date(`${event.end_date}T23:59:59.999`)
+      return Number.isNaN(end.getTime()) ? null : end.getTime()
+    }
+
+    if (event?.starts_at) {
+      const start = new Date(event.starts_at)
+      if (Number.isNaN(start.getTime())) return null
+
+      const endOfStartDay = new Date(start)
+      endOfStartDay.setHours(23, 59, 59, 999)
+      return endOfStartDay.getTime()
+    }
+
+    return null
+  }
+
+  function isCurrentOrUpcomingEvent(event) {
+    const endTimestamp = getEventEndTimestamp(event)
+    return endTimestamp === null || endTimestamp >= Date.now()
   }
 
   function formatMoney(value) {
@@ -404,11 +499,31 @@ function Dashboard() {
       <main className="mx-auto max-w-[430px] px-5 pt-8">
         <div className="mb-6 flex items-start justify-between gap-4">
           <div className="flex items-center gap-4">
-            <img
-              src="/vendly-logo.svg"
-              alt="Vendly Logo"
-              className="h-16 w-16 shrink-0"
-            />
+            <label className="group relative h-16 w-16 shrink-0 cursor-pointer">
+              {profileImageUrl ? (
+                <img
+                  src={profileImageUrl}
+                  alt="Profile"
+                  className="h-16 w-16 rounded-full border border-[#333] object-cover"
+                />
+              ) : (
+                <div className="flex h-16 w-16 items-center justify-center rounded-full border border-[#333] bg-[#111]">
+                  <User size={26} className="text-gray-500" />
+                </div>
+              )}
+
+              <span className="absolute inset-0 flex items-center justify-center rounded-full bg-black/60 opacity-0 transition group-hover:opacity-100">
+                <Camera size={18} className="text-white" />
+              </span>
+
+              <input
+                type="file"
+                accept="image/*"
+                onChange={handleProfileImageUpload}
+                disabled={uploadingProfileImage}
+                className="hidden"
+              />
+            </label>
         
             <div>
               <h1 className="text-3xl font-bold">
@@ -442,15 +557,18 @@ function Dashboard() {
               )}
             </button>
 
-            <button
-              onClick={handleLogout}
-              className="rounded-xl border border-[#222] bg-[#111] p-3 text-gray-300 hover:text-white"
-              aria-label="Log out"
-            >
-              <LogOut size={18} />
-            </button>
-          </div>
+</div>
         </div>
+
+        {profileImageMessage && (
+          <p className={`mb-4 rounded-xl border p-3 text-sm font-bold ${
+            profileImageMessage.toLowerCase().includes('updated')
+              ? 'border-green-900 bg-green-950/40 text-green-300'
+              : 'border-red-900 bg-red-950/40 text-red-300'
+          }`}>
+            {profileImageMessage}
+          </p>
+        )}
 
         {message && (
           <p className="mb-4 rounded-xl border border-[#222] bg-[#111] p-3 text-sm text-gray-300">
@@ -909,6 +1027,7 @@ function Dashboard() {
                         city={profile.event.city}
                         state={profile.event.state}
                         startsAt={profile.event.starts_at}
+                        iconUrl={profile.event.icon_url}
                         formatDate={formatDate}
                         formatTime={formatTime}
                         footerLabel="Booth"
@@ -924,8 +1043,8 @@ function Dashboard() {
               <section className="mb-6">
                 <div className="mb-3 flex items-center justify-between">
                   <h2 className="text-xl font-semibold">Recent Sales</h2>
-                  <Link to="/sales" className="text-xs font-semibold text-yellow-300">
-                    View sales
+                  <Link to="/activity" className="text-xs font-semibold text-yellow-300">
+                    View activity
                   </Link>
                 </div>
 
@@ -1015,6 +1134,7 @@ function Dashboard() {
                         city={event.city}
                         state={event.state}
                         startsAt={event.starts_at}
+                        iconUrl={event.icon_url}
                         formatDate={formatDate}
                         formatTime={formatTime}
                       />
@@ -1064,6 +1184,7 @@ function ShowCard({
   city,
   state,
   startsAt,
+  iconUrl,
   formatDate,
   formatTime,
   footerLabel,
@@ -1071,16 +1192,30 @@ function ShowCard({
 }) {
   return (
     <div className="rounded-2xl border border-[#222] bg-[#111] p-4">
-      <div className="flex items-start justify-between gap-3">
-        <div>
-          <p className="font-semibold">{name}</p>
-          <p className="mt-1 text-sm text-gray-400">{venue || 'Venue TBD'}</p>
-          <p className="text-sm text-gray-500">
+      <div className="flex items-start gap-3">
+        <div className="flex h-14 w-14 shrink-0 items-center justify-center rounded-2xl bg-[#1a1a1a]">
+          {iconUrl ? (
+            <img
+              src={iconUrl}
+              alt={name}
+              className="h-10 w-10 rounded-xl object-cover"
+            />
+          ) : (
+            <CalendarDays className="text-gray-400" size={24} />
+          )}
+        </div>
+
+        <div className="min-w-0 flex-1">
+          <p className="truncate font-semibold">{name}</p>
+          <p className="mt-1 truncate text-sm text-gray-400">
+            {venue || 'Venue TBD'}
+          </p>
+          <p className="truncate text-sm text-gray-500">
             {[city, state].filter(Boolean).join(', ')}
           </p>
         </div>
 
-        <div className="text-right">
+        <div className="shrink-0 text-right">
           <p className="text-sm font-semibold text-yellow-300">
             {formatDate(startsAt)}
           </p>

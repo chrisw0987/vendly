@@ -302,6 +302,29 @@ function ImportInventory() {
     loadImportSettings()
   }, [])
 
+  function getEventEndTimestamp(event) {
+    if (event?.end_date) {
+      const end = new Date(`${event.end_date}T23:59:59.999`)
+      return Number.isNaN(end.getTime()) ? null : end.getTime()
+    }
+
+    if (event?.starts_at) {
+      const start = new Date(event.starts_at)
+      if (Number.isNaN(start.getTime())) return null
+
+      const endOfStartDay = new Date(start)
+      endOfStartDay.setHours(23, 59, 59, 999)
+      return endOfStartDay.getTime()
+    }
+
+    return null
+  }
+
+  function isCurrentOrUpcomingEvent(event) {
+    const endTimestamp = getEventEndTimestamp(event)
+    return endTimestamp === null || endTimestamp >= Date.now()
+  }
+
   async function loadImportSettings() {
     setLoadingImportSettings(true)
 
@@ -332,7 +355,8 @@ function ImportInventory() {
             venue,
             city,
             state,
-            starts_at
+            starts_at,
+            end_date
           )
         `)
         .eq('vendor_id', user.id),
@@ -356,6 +380,7 @@ function ImportInventory() {
           booth_number: profile.booth_number,
         }))
         .filter(Boolean)
+        .filter(isCurrentOrUpcomingEvent)
         .sort(
           (a, b) =>
             new Date(a.starts_at || 0).getTime() -
@@ -640,23 +665,33 @@ function ImportInventory() {
   }, [matchResults])
 
   const sortedRowsForDisplay = useMemo(() => {
-    const priority = {
-      invalid: 0,
-      not_found: 1,
-      needs_review: 2,
-      matched: 3,
-      unmatched: 4,
+    function getRowPriority(row) {
+      const result = matchResultsByRow.get(Number(row.row_number))
+      const status = result?.status || 'unmatched'
+
+      if (status === 'invalid') return 0
+      if (status === 'not_found') return 1
+      if (status === 'needs_review') return 2
+      if (!row.ready) return 3
+
+      if (
+        status === 'matched' &&
+        row.item_type === 'graded' &&
+        (!row.grade_company || !row.grade)
+      ) {
+        return 4
+      }
+
+      if (row.warnings?.length > 0) return 5
+      if (status === 'unmatched') return 6
+      if (status === 'matched') return 7
+
+      return 8
     }
 
     return [...normalizedRows].sort((a, b) => {
-      const aResult = matchResultsByRow.get(Number(a.row_number))
-      const bResult = matchResultsByRow.get(Number(b.row_number))
-
-      const aStatus = aResult?.status || 'unmatched'
-      const bStatus = bResult?.status || 'unmatched'
-
-      const aPriority = priority[aStatus] ?? 99
-      const bPriority = priority[bStatus] ?? 99
+      const aPriority = getRowPriority(a)
+      const bPriority = getRowPriority(b)
 
       if (aPriority !== bPriority) return aPriority - bPriority
       return Number(a.row_number) - Number(b.row_number)
@@ -3640,10 +3675,10 @@ function ImportInventory() {
                     <button
                       type="button"
                       onClick={() => setMakePublic(false)}
-                      className={`rounded-lg px-3 py-3 text-sm font-bold ${
+                      className={`rounded-lg px-3 py-3 text-sm font-bold transition ${
                         !makePublic
-                          ? 'bg-white text-black'
-                          : 'text-gray-500'
+                          ? 'bg-red-500 text-black'
+                          : 'text-red-400 hover:bg-red-950/30'
                       }`}
                     >
                       Keep Private
@@ -3652,10 +3687,10 @@ function ImportInventory() {
                     <button
                       type="button"
                       onClick={() => setMakePublic(true)}
-                      className={`rounded-lg px-3 py-3 text-sm font-bold ${
+                      className={`rounded-lg px-3 py-3 text-sm font-bold transition ${
                         makePublic
-                          ? 'bg-white text-black'
-                          : 'text-gray-500'
+                          ? 'bg-green-500 text-black'
+                          : 'text-green-400 hover:bg-green-950/30'
                       }`}
                     >
                       Make Public
@@ -3678,7 +3713,7 @@ function ImportInventory() {
 
                   {vendorShows.length === 0 ? (
                     <div className="rounded-xl border border-[#222] bg-black p-3 text-sm text-gray-500">
-                      No joined shows found. You can assign these cards later.
+                      No active joined shows found. Past shows cannot receive new inventory assignments.
                     </div>
                   ) : (
                     <div className="space-y-2">

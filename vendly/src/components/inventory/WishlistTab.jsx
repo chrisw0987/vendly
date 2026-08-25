@@ -46,6 +46,8 @@ function WishlistTab() {
   const [message, setMessage] = useState('')
   const [search, setSearch] = useState('')
   const [filter, setFilter] = useState('all')
+  const [typeFilter, setTypeFilter] = useState('all')
+  const [sortOption, setSortOption] = useState('name-asc')
   const [selectedItemIds, setSelectedItemIds] = useState([])
   const [editingItem, setEditingItem] = useState(null)
   const [deleteConfirm, setDeleteConfirm] = useState(null)
@@ -560,6 +562,40 @@ function WishlistTab() {
     return true
   }
 
+  function matchesTypeFilter(item) {
+    if (typeFilter === 'raw') return item.item_type !== 'graded'
+    if (typeFilter === 'graded') return item.item_type === 'graded'
+    return true
+  }
+
+  function getWishlistSortPrice(item) {
+    return Number(item.target_price ?? Number.POSITIVE_INFINITY)
+  }
+
+  function sortWishlistItems(list) {
+    const sorted = [...list]
+
+    switch (sortOption) {
+      case 'name-desc':
+        return sorted.sort((a, b) =>
+          String(b.card_name || '').localeCompare(String(a.card_name || ''))
+        )
+      case 'price-low':
+        return sorted.sort(
+          (a, b) => getWishlistSortPrice(a) - getWishlistSortPrice(b)
+        )
+      case 'price-high':
+        return sorted.sort(
+          (a, b) => getWishlistSortPrice(b) - getWishlistSortPrice(a)
+        )
+      case 'name-asc':
+      default:
+        return sorted.sort((a, b) =>
+          String(a.card_name || '').localeCompare(String(b.card_name || ''))
+        )
+    }
+  }
+
   function formatMoney(value) {
     if (value === null || value === undefined || value === '') return null
     return `$${Number(value).toFixed(2)}`
@@ -634,8 +670,16 @@ function WishlistTab() {
   }
 
   const filteredItems = useMemo(
-    () => items.filter((item) => matchesSearch(item) && matchesFilter(item)),
-    [items, search, filter]
+    () =>
+      sortWishlistItems(
+        items.filter(
+          (item) =>
+            matchesSearch(item) &&
+            matchesFilter(item) &&
+            matchesTypeFilter(item)
+        )
+      ),
+    [items, search, filter, typeFilter, sortOption]
   )
 
   const filterOptions = [
@@ -740,6 +784,29 @@ function WishlistTab() {
                 <X size={18} />
               </button>
             )}
+          </div>
+
+          <div className="grid grid-cols-2 gap-2">
+            <select
+              value={typeFilter}
+              onChange={(event) => setTypeFilter(event.target.value)}
+              className="w-full rounded-xl border border-[#222] bg-[#111] px-4 py-3 text-sm font-semibold text-white outline-none"
+            >
+              <option value="all">All Types</option>
+              <option value="raw">Raw Only</option>
+              <option value="graded">Slab Only</option>
+            </select>
+
+            <select
+              value={sortOption}
+              onChange={(event) => setSortOption(event.target.value)}
+              className="w-full rounded-xl border border-[#222] bg-[#111] px-4 py-3 text-sm font-semibold text-white outline-none"
+            >
+              <option value="name-asc">Name: A–Z</option>
+              <option value="name-desc">Name: Z–A</option>
+              <option value="price-low">Price: Low–High</option>
+              <option value="price-high">Price: High–Low</option>
+            </select>
           </div>
 
           <div className="flex gap-2 overflow-x-auto pb-1">

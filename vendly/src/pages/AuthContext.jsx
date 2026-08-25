@@ -16,30 +16,39 @@ const AuthContext = createContext(null)
 export function AuthProvider({ children }) {
   const [user, setUser] = useState(null)
   const [accountType, setAccountType] = useState('user')
+  const [profileImageUrl, setProfileImageUrl] = useState('')
   const [authReady, setAuthReady] = useState(false)
 
   const loadProfile = useCallback(async (nextUser) => {
     if (!nextUser) {
       setAccountType('user')
-      return 'user'
+      setProfileImageUrl('')
+      return { accountType: 'user', profileImageUrl: '' }
     }
 
     const { data, error } = await supabase
       .from('users')
-      .select('account_type')
+      .select('account_type, profile_image_url')
       .eq('id', nextUser.id)
       .maybeSingle()
 
     if (error) {
       console.warn('Unable to load auth profile:', error.message)
       setAccountType('user')
-      return 'user'
+      setProfileImageUrl('')
+      return { accountType: 'user', profileImageUrl: '' }
     }
 
     const nextAccountType = data?.account_type || 'user'
-    setAccountType(nextAccountType)
+    const nextProfileImageUrl = data?.profile_image_url || ''
 
-    return nextAccountType
+    setAccountType(nextAccountType)
+    setProfileImageUrl(nextProfileImageUrl)
+
+    return {
+      accountType: nextAccountType,
+      profileImageUrl: nextProfileImageUrl,
+    }
   }, [])
 
   const refreshProfile = useCallback(async () => {
@@ -58,15 +67,12 @@ export function AuthProvider({ children }) {
         if (!mounted) return
 
         const nextUser = session?.user || null
-
         setUser(nextUser)
         await loadProfile(nextUser)
       } catch (error) {
         console.error('Auth initialization failed:', error)
       } finally {
-        if (mounted) {
-          setAuthReady(true)
-        }
+        if (mounted) setAuthReady(true)
       }
     }
 
@@ -78,13 +84,8 @@ export function AuthProvider({ children }) {
       if (!mounted) return
 
       const nextUser = session?.user || null
-
-      // Update the session immediately.
       setUser(nextUser)
 
-      // Keep the app rendered once initial auth is ready.
-      // Profile changes refresh in the background instead of
-      // forcing every page back into a loading state.
       loadProfile(nextUser).catch((error) => {
         console.error('Auth profile refresh failed:', error)
       })
@@ -100,13 +101,14 @@ export function AuthProvider({ children }) {
     () => ({
       user,
       accountType,
+      profileImageUrl,
       authReady,
       isGuest: authReady && !user,
       isVendor: accountType === 'vendor' || accountType === 'admin',
       isAdmin: accountType === 'admin',
       refreshProfile,
     }),
-    [user, accountType, authReady, refreshProfile]
+    [user, accountType, profileImageUrl, authReady, refreshProfile]
   )
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>

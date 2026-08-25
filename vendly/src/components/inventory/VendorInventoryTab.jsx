@@ -24,6 +24,8 @@ function VendorInventoryTab() {
   const [actionLoading, setActionLoading] = useState('')
   const [inventorySearch, setInventorySearch] = useState('')
   const [inventoryFilter, setInventoryFilter] = useState('all')
+  const [inventoryTypeFilter, setInventoryTypeFilter] = useState('all')
+  const [inventorySort, setInventorySort] = useState('name-asc')
   const [events, setEvents] = useState([])
   const [showAssignments, setShowAssignments] = useState([])
   const [assigningItem, setAssigningItem] = useState(null)
@@ -925,6 +927,54 @@ function VendorInventoryTab() {
     }
   }
 
+  function matchesInventoryType(item) {
+    if (inventoryTypeFilter === 'raw') {
+      return item.item_type !== 'graded'
+    }
+
+    if (inventoryTypeFilter === 'graded') {
+      return item.item_type === 'graded'
+    }
+
+    return true
+  }
+
+  function getInventorySortPrice(item) {
+    if (isVendor) {
+      return Number(
+        item.listing_price ??
+          item.market_price ??
+          Number.POSITIVE_INFINITY
+      )
+    }
+
+    return Number(item.market_price ?? Number.POSITIVE_INFINITY)
+  }
+
+  function sortInventoryItems(list) {
+    const sorted = [...list]
+
+    switch (inventorySort) {
+      case 'name-desc':
+        return sorted.sort((a, b) =>
+          String(b.card_name || '').localeCompare(String(a.card_name || ''))
+        )
+      case 'price-low':
+        return sorted.sort(
+          (a, b) => getInventorySortPrice(a) - getInventorySortPrice(b)
+        )
+      case 'price-high':
+        return sorted.sort(
+          (a, b) => getInventorySortPrice(b) - getInventorySortPrice(a)
+        )
+      case 'name-asc':
+      default:
+        return sorted.sort((a, b) =>
+          String(a.card_name || '').localeCompare(String(b.card_name || ''))
+        )
+    }
+  }
+
   function formatMoney(value) {
     if (value === null || value === undefined || value === '') return null
     return `$${Number(value).toFixed(2)}`
@@ -1073,8 +1123,13 @@ function VendorInventoryTab() {
 
   const selectedCount = selectedItemIds.length
 
-  const filteredItems = items.filter(
-    (item) => matchesInventorySearch(item) && matchesInventoryFilter(item)
+  const filteredItems = sortInventoryItems(
+    items.filter(
+      (item) =>
+        matchesInventorySearch(item) &&
+        matchesInventoryFilter(item) &&
+        matchesInventoryType(item)
+    )
   )
 
   const filterOptions = isVendor
@@ -1222,6 +1277,29 @@ function VendorInventoryTab() {
                   <X size={18} />
                 </button>
               )}
+            </div>
+
+            <div className="grid grid-cols-2 gap-2">
+              <select
+                value={inventoryTypeFilter}
+                onChange={(event) => setInventoryTypeFilter(event.target.value)}
+                className="w-full rounded-xl border border-[#222] bg-[#111] px-4 py-3 text-sm font-semibold text-white outline-none"
+              >
+                <option value="all">All Types</option>
+                <option value="raw">Raw Only</option>
+                <option value="graded">Slab Only</option>
+              </select>
+
+              <select
+                value={inventorySort}
+                onChange={(event) => setInventorySort(event.target.value)}
+                className="w-full rounded-xl border border-[#222] bg-[#111] px-4 py-3 text-sm font-semibold text-white outline-none"
+              >
+                <option value="name-asc">Name: A–Z</option>
+                <option value="name-desc">Name: Z–A</option>
+                <option value="price-low">Price: Low–High</option>
+                <option value="price-high">Price: High–Low</option>
+              </select>
             </div>
 
             <div className="flex gap-2 overflow-x-auto pb-1">

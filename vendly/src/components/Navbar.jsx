@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { Link, useLocation } from 'react-router-dom'
+import { Link, useLocation, useNavigate } from 'react-router-dom'
 import {
   House,
   Package,
@@ -10,13 +10,17 @@ import {
   UserPlus,
   Menu,
   X,
+  LogOut,
 } from 'lucide-react'
+import { supabase } from '../lib/supabase'
 import { useAuth } from '../pages/AuthContext'
 
 function Navbar() {
   const location = useLocation()
-  const { user, authReady } = useAuth()
+  const navigate = useNavigate()
+  const { user, profileImageUrl, authReady } = useAuth()
   const [menuOpen, setMenuOpen] = useState(false)
+  const [loggingOut, setLoggingOut] = useState(false)
 
   useEffect(() => {
     setMenuOpen(false)
@@ -32,6 +36,22 @@ function Navbar() {
       document.body.style.overflow = previousOverflow
     }
   }, [menuOpen])
+
+  async function handleLogout() {
+    if (loggingOut) return
+
+    setLoggingOut(true)
+    const { error } = await supabase.auth.signOut()
+
+    if (error) {
+      console.error('Logout failed:', error.message)
+      setLoggingOut(false)
+      return
+    }
+
+    setMenuOpen(false)
+    navigate('/')
+  }
 
   const memberNavItems = [
     { label: 'Home', path: '/dashboard', icon: House },
@@ -75,17 +95,21 @@ function Navbar() {
 
           <aside className="absolute left-0 top-0 flex h-full w-[290px] max-w-[82vw] flex-col border-r border-[#222] bg-[#0b0b0b] p-5 shadow-2xl">
             <div className="flex items-center justify-between gap-3">
-              <Link
-                to={user ? '/dashboard' : '/search'}
-                className="flex items-center gap-3"
-              >
-                <img
-                  src="/vendly-logo.svg"
-                  alt="Vendly"
-                  className="h-10 w-10 object-contain"
-                />
-                <div>
-                  <p className="text-lg font-black text-white">Vendly</p>
+              <Link to={user ? '/dashboard' : '/search'} className="flex min-w-0 items-center gap-3">
+                {user && profileImageUrl ? (
+                  <img
+                    src={profileImageUrl}
+                    alt="Profile"
+                    className="h-11 w-11 shrink-0 rounded-full border border-[#333] object-cover"
+                  />
+                ) : (
+                  <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full border border-[#2a2a2a] bg-black">
+                    <User size={20} className="text-gray-400" />
+                  </div>
+                )}
+
+                <div className="min-w-0">
+                  <p className="truncate text-lg font-black text-white">Vendly</p>
                   <p className="text-[11px] text-gray-500">
                     {user ? 'Member menu' : 'Guest menu'}
                   </p>
@@ -106,9 +130,7 @@ function Navbar() {
               {navItems.map((item) => {
                 const Icon = item.icon
                 const isSignup = item.path === '/?mode=signup'
-                const isActive = isSignup
-                  ? false
-                  : location.pathname === item.path
+                const isActive = isSignup ? false : location.pathname === item.path
 
                 return (
                   <Link
@@ -127,7 +149,17 @@ function Navbar() {
               })}
             </nav>
 
-            {!user && (
+            {user ? (
+              <button
+                type="button"
+                onClick={handleLogout}
+                disabled={loggingOut}
+                className="mt-auto flex w-full items-center justify-center gap-2 rounded-xl border border-red-900/70 bg-red-950/20 px-4 py-3 text-sm font-bold text-red-300 disabled:opacity-60"
+              >
+                <LogOut size={17} />
+                {loggingOut ? 'Logging Out...' : 'Log Out'}
+              </button>
+            ) : (
               <div className="mt-auto rounded-2xl border border-yellow-900/50 bg-yellow-950/10 p-4">
                 <p className="text-sm font-bold text-white">Browsing as Guest</p>
                 <p className="mt-1 text-xs leading-5 text-gray-500">

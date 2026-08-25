@@ -24,6 +24,7 @@ import {
   Sparkles,
   ArrowRight,
   Camera,
+  FileUp,
 } from 'lucide-react'
 
 function Search() {
@@ -1881,15 +1882,30 @@ function Search() {
   return (
     <div className="min-h-screen bg-black text-white pb-24">
       <main className="mx-auto max-w-[430px] px-5 pt-8">
-        <div className="mb-8">
-          <h1 className="text-3xl font-bold">Search</h1>
-          <p className="mt-1 text-sm text-gray-400">
-            {isVendor
-              ? 'Search cards, sets, and add items to inventory.'
-              : isGuest
-              ? 'Search cards and discover where to find them at upcoming shows.'
-              : 'Search cards, sets, and add items to your wishlist.'}
-          </p>
+        <div className="mb-8 flex items-start justify-between gap-4">
+          <div className="min-w-0">
+            <h1 className="text-3xl font-bold">Search</h1>
+            <p className="mt-1 text-sm text-gray-400">
+              {isVendor
+                ? 'Search cards, sets, and add items to inventory.'
+                : isGuest
+                ? 'Search cards and discover where to find them at upcoming shows.'
+                : 'Search cards, sets, and add items to your wishlist.'}
+            </p>
+          </div>
+
+          {isVendor && (
+            <button
+              type="button"
+              onClick={() => navigate('/import-inventory')}
+              className="mt-1 flex shrink-0 items-center gap-2 rounded-xl border border-[#2a2a2a] bg-[#111] px-3 py-2.5 text-xs font-bold text-gray-300 transition hover:border-[#444] hover:text-white"
+              aria-label="Import inventory CSV"
+              title="Import inventory CSV"
+            >
+              <FileUp size={15} />
+              Import
+            </button>
+          )}
         </div>
 
         {isGuest && (

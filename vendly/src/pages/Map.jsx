@@ -13,6 +13,7 @@ import {
   ArrowLeft,
   Search as SearchIcon,
   CheckCircle2,
+  User,
 } from 'lucide-react'
 import { supabase } from '../lib/supabase'
 import { useAuth } from '../pages/AuthContext'
@@ -191,11 +192,7 @@ function Map() {
       setMessage(error.message)
       setEvents([])
     } else {
-      const nextEvents =
-        accountTypeOverride === 'admin'
-          ? data || []
-          : (data || []).filter(isCurrentOrUpcomingEvent)
-
+      const nextEvents = (data || []).filter(isCurrentOrUpcomingEvent)
       setEvents(nextEvents)
     }
 
@@ -239,7 +236,7 @@ function Map() {
           saved_row_id: row.id,
         }))
         .filter(Boolean)
-        .filter((event) => accountTypeOverride === 'admin' || isCurrentOrUpcomingEvent(event)) || []
+        .filter(isCurrentOrUpcomingEvent) || []
 
     setSavedEvents(saved)
     setSavedEventIds(saved.map((event) => event.id))
@@ -399,7 +396,7 @@ function Map() {
 
     const { data, error } = await supabase
       .from('vendor_event_profiles')
-      .select('booth_number')
+      .select('booth_number, vendor_id, display_name')
       .eq('event_id', eventId)
       .eq('public_enabled', true)
 
@@ -408,7 +405,43 @@ function Map() {
       return
     }
 
-    setOccupiedBooths(data?.map((row) => row.booth_number).filter(Boolean) || [])
+    const vendorIds = [
+      ...new Set((data || []).map((row) => row.vendor_id).filter(Boolean)),
+    ]
+
+    let profileImageMap = new globalThis.Map()
+
+    if (vendorIds.length > 0) {
+      const { data: vendorProfiles, error: vendorProfilesError } =
+        await supabase.rpc('get_public_vendor_profiles', {
+          vendor_ids: vendorIds,
+        })
+
+      if (vendorProfilesError) {
+        console.warn(
+          'Unable to load public vendor profile photos:',
+          vendorProfilesError
+        )
+      }
+
+      profileImageMap = new globalThis.Map(
+        (vendorProfiles || []).map((profile) => [
+          profile.id,
+          profile.profile_image_url || '',
+        ])
+      )
+    }
+
+    setOccupiedBooths(
+      (data || [])
+        .filter((row) => row.booth_number)
+        .map((row) => ({
+          boothNumber: row.booth_number,
+          vendorId: row.vendor_id,
+          vendorName: row.display_name || 'Vendor',
+          profileImageUrl: profileImageMap.get(row.vendor_id) || '',
+        }))
+    )
   }
 
   async function fetchVendorTableDetails(table) {
@@ -464,6 +497,20 @@ function Map() {
       return
     }
 
+    const { data: vendorUserProfiles, error: vendorUserProfileError } =
+      await supabase.rpc('get_public_vendor_profiles', {
+        vendor_ids: [booth.vendor_id],
+      })
+
+    if (vendorUserProfileError) {
+      console.warn(
+        'Unable to load public vendor profile photo:',
+        vendorUserProfileError
+      )
+    }
+
+    const vendorUserProfile = vendorUserProfiles?.[0] || null
+
     const { data: assignedRows, error: assignedError } = await supabase
       .from('show_inventory')
       .select('id, inventory_item_id')
@@ -508,6 +555,7 @@ function Map() {
       vendorId: booth.vendor_id,
       boothNumber: booth.booth_number,
       vendorName: booth.display_name || 'Vendor',
+      profileImageUrl: vendorUserProfile?.profile_image_url || '',
       inventory: assignedError || inventoryError ? [] : assignedInventory,
       inventoryError: assignedError?.message || inventoryError?.message || '',
     })
@@ -765,6 +813,25 @@ function Map() {
       (profiles || []).map((profile) => [profile.vendor_id, profile])
     )
 
+    const { data: vendorUsers, error: vendorUsersError } =
+      await supabase.rpc('get_public_vendor_profiles', {
+        vendor_ids: vendorIds,
+      })
+
+    if (vendorUsersError) {
+      console.warn(
+        'Unable to load public vendor profile photos for search:',
+        vendorUsersError
+      )
+    }
+
+    const vendorImageMap = new globalThis.Map(
+      (vendorUsers || []).map((profile) => [
+        profile.id,
+        profile.profile_image_url || '',
+      ])
+    )
+
     const results = matchingRows
       .map((row) => {
         const profile = profileMap.get(row.vendor_id)
@@ -776,6 +843,7 @@ function Map() {
           vendorId: row.vendor_id,
           vendorName: profile.display_name || 'Vendor',
           boothNumber: profile.booth_number,
+          profileImageUrl: vendorImageMap.get(row.vendor_id) || '',
         }
       })
       .filter(Boolean)
@@ -800,6 +868,7 @@ function Map() {
       id: `booth-${result.boothNumber}`,
       booth_code: result.boothNumber,
       tableNumber: result.boothNumber,
+      profileImageUrl: result.profileImageUrl || '',
     })
   }
 
@@ -862,8 +931,8 @@ function Map() {
   }
 
   async function openMoreInfo(event) {
-    if (accountType !== 'admin' && isPastEvent(event)) {
-      setMessage('This show has ended and is no longer accessible.')
+    if (isPastEvent(event)) {
+      setMessage('This show has ended and is no longer accessible from the Map.')
       return
     }
 
@@ -1656,9 +1725,22 @@ function Map() {
                                   {getItemSet(item)}
                                   {item.card_number ? ` #${item.card_number}` : ''}
                                 </p>
-                                <p className="mt-1 text-xs text-green-300">
-                                  Booth {result.boothNumber} · {result.vendorName}
-                                </p>
+                                <div className="mt-2 flex items-center gap-2">
+                                  {result.profileImageUrl ? (
+                                    <img
+                                      src={result.profileImageUrl}
+                                      alt={result.vendorName}
+                                      className="h-6 w-6 rounded-full object-cover"
+                                    />
+                                  ) : (
+                                    <div className="flex h-6 w-6 items-center justify-center rounded-full border border-[#333] bg-black">
+                                      <User size={11} className="text-gray-500" />
+                                    </div>
+                                  )}
+                                  <p className="text-xs text-green-300">
+                                    Booth {result.boothNumber} · {result.vendorName}
+                                  </p>
+                                </div>
                                 {price && (
                                   <p className="mt-1 text-sm font-bold text-yellow-300">
                                     ${Number(price).toFixed(2)}
@@ -1777,7 +1859,10 @@ function Map() {
                           <div className="grid grid-cols-3 gap-3">
                             {group.booths.map((booth) => {
                               const boothCode = booth.booth_code
-                              const hasVendor = occupiedBooths.includes(boothCode)
+                              const vendorInfo = occupiedBooths.find(
+                                (item) => item.boothNumber === boothCode
+                              )
+                              const hasVendor = Boolean(vendorInfo)
 
                               return (
                                 <button
@@ -1794,9 +1879,23 @@ function Map() {
                                       : 'border border-[#333] bg-[#161616] text-gray-400'
                                   }`}
                                 >
-                                  <p className="text-lg font-bold">{boothCode}</p>
-                                  <p className="mt-1 text-xs">
-                                    {hasVendor ? 'Vendor assigned' : 'Empty'}
+                                  {hasVendor && vendorInfo?.profileImageUrl ? (
+                                    <img
+                                      src={vendorInfo.profileImageUrl}
+                                      alt={vendorInfo.vendorName}
+                                      className="mx-auto h-10 w-10 rounded-full border border-green-800/70 object-cover"
+                                    />
+                                  ) : hasVendor ? (
+                                    <div className="mx-auto flex h-10 w-10 items-center justify-center rounded-full border border-green-900 bg-green-950/40">
+                                      <User size={17} />
+                                    </div>
+                                  ) : null}
+
+                                  <p className={`${hasVendor ? 'mt-2' : ''} text-lg font-bold`}>
+                                    {boothCode}
+                                  </p>
+                                  <p className="mt-1 truncate text-xs">
+                                    {hasVendor ? vendorInfo.vendorName : 'Empty'}
                                   </p>
                                 </button>
                               )
@@ -1832,12 +1931,28 @@ function Map() {
                 </div>
 
                 <div className="rounded-2xl border border-[#222] bg-black p-4">
-                  <p className="text-sm text-gray-400">
-                    Booth {selectedVendorTable.boothNumber || selectedVendorTable.tableNumber}
-                  </p>
-                  <h2 className="mt-1 text-2xl font-bold">
-                    {selectedVendorTable.vendorName}
-                  </h2>
+                  <div className="flex items-center gap-3">
+                    {selectedVendorTable.profileImageUrl ? (
+                      <img
+                        src={selectedVendorTable.profileImageUrl}
+                        alt={selectedVendorTable.vendorName}
+                        className="h-14 w-14 shrink-0 rounded-full border border-[#333] object-cover"
+                      />
+                    ) : (
+                      <div className="flex h-14 w-14 shrink-0 items-center justify-center rounded-full border border-[#333] bg-[#111]">
+                        <User size={22} className="text-gray-500" />
+                      </div>
+                    )}
+
+                    <div className="min-w-0">
+                      <p className="text-sm text-gray-400">
+                        Booth {selectedVendorTable.boothNumber || selectedVendorTable.tableNumber}
+                      </p>
+                      <h2 className="mt-1 truncate text-2xl font-bold">
+                        {selectedVendorTable.vendorName}
+                      </h2>
+                    </div>
+                  </div>
                 </div>
 
                 <div className="mt-5">

@@ -203,6 +203,29 @@ function VendorInventoryTab() {
   }
 
 
+  function getEventEndTimestamp(event) {
+    if (event?.end_date) {
+      const end = new Date(`${event.end_date}T23:59:59.999`)
+      return Number.isNaN(end.getTime()) ? null : end.getTime()
+    }
+
+    if (event?.starts_at) {
+      const start = new Date(event.starts_at)
+      if (Number.isNaN(start.getTime())) return null
+
+      const endOfStartDay = new Date(start)
+      endOfStartDay.setHours(23, 59, 59, 999)
+      return endOfStartDay.getTime()
+    }
+
+    return null
+  }
+
+  function isCurrentOrUpcomingEvent(event) {
+    const endTimestamp = getEventEndTimestamp(event)
+    return endTimestamp === null || endTimestamp >= Date.now()
+  }
+
   async function fetchShowAssignmentData() {
     const user = await getUserOrRedirect()
     if (!user) return
@@ -221,7 +244,8 @@ function VendorInventoryTab() {
           city,
           state,
           venue,
-          starts_at
+          starts_at,
+          end_date
         )
       `)
       .eq('vendor_id', user.id)
@@ -251,6 +275,7 @@ function VendorInventoryTab() {
           public_enabled: profile.public_enabled,
         }))
         .filter(Boolean)
+        .filter(isCurrentOrUpcomingEvent)
         .sort(
           (a, b) =>
             new Date(a.starts_at || 0).getTime() -
@@ -285,6 +310,11 @@ function VendorInventoryTab() {
 
   async function toggleShowAssignment(event) {
     if (!assigningItem) return
+
+    if (!isCurrentOrUpcomingEvent(event)) {
+      setMessage('Past shows cannot receive new inventory assignments.')
+      return
+    }
 
     const user = await getUserOrRedirect()
     if (!user) return
@@ -1040,6 +1070,12 @@ function VendorInventoryTab() {
   async function bulkAssignToShow(event) {
     if (selectedItemIds.length === 0 || actionLoading) return
 
+    if (!isCurrentOrUpcomingEvent(event)) {
+      setMessage('Past shows cannot receive new inventory assignments.')
+      setBulkAssigning(false)
+      return
+    }
+
     const user = await getUserOrRedirect()
     if (!user) return
 
@@ -1656,7 +1692,7 @@ function VendorInventoryTab() {
             {events.length === 0 ? (
               <div className="rounded-2xl border border-[#222] bg-black p-5 text-center">
                 <p className="text-sm text-gray-400">
-                  No vendor shows found. Join a show from the Shows page first.
+                  No active joined shows found. Past shows cannot receive new inventory assignments.
                 </p>
               </div>
             ) : (
@@ -1741,7 +1777,7 @@ function VendorInventoryTab() {
             {events.length === 0 ? (
               <div className="rounded-2xl border border-[#222] bg-black p-5 text-center">
                 <p className="text-sm text-gray-400">
-                  No vendor shows found. Join a show from the Shows page first, then assign inventory to that show.
+                  No active joined shows found. Past shows cannot receive new inventory assignments.
                 </p>
               </div>
             ) : (

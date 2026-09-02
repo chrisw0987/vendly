@@ -1130,8 +1130,8 @@ function ImportInventory() {
       return
     }
 
-    if (rowsToMatch.length > 250) {
-      setMessage('Please match no more than 250 valid rows at a time.')
+    if (rowsToMatch.length > 500) {
+      setMessage('Please match no more than 500 valid rows at a time.')
       return
     }
 
